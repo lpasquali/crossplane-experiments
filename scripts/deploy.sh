@@ -5,7 +5,10 @@
 #   3. refreshes the umbrella chart's Helm dependencies (chart/charts/*.tgz)
 #   4. helm install/upgrade --install's the umbrella chart
 #
-# Usage: ./scripts/deploy.sh
+# Usage: ./scripts/deploy.sh [--hostname <vm-ip-or-dns-name>] [extra helm args...]
+#   --hostname NAME  sets Helm value reverseProxy.hostname (also settable via
+#                    the VM_HOSTNAME env var; the flag wins). Default: this VM's
+#                    own hostname (`hostname -f`).
 #
 # Safe to re-run: if the kind cluster "cnpg-crossplane" already exists it
 # is reused as-is (use scripts/destroy.sh first for a truly clean slate),
@@ -16,6 +19,19 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 CLUSTER_NAME="cnpg-crossplane"
 RELEASE_NAME="crossplane-experiments"
 NAMESPACE="crossplane-system"
+VM_HOSTNAME="${VM_HOSTNAME:-$(hostname -f 2>/dev/null || hostname)}"
+
+HELM_ARGS=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --hostname)
+      [[ $# -ge 2 ]] || { echo "--hostname requires a value" >&2; exit 1; }
+      VM_HOSTNAME="$2"; shift 2 ;;
+    --hostname=*) VM_HOSTNAME="${1#*=}"; shift ;;
+    *) HELM_ARGS+=("$1"); shift ;;
+  esac
+done
+HELM_ARGS+=(--set "reverseProxy.hostname=${VM_HOSTNAME}")
 
 if kind get clusters 2>/dev/null | grep -qx "${CLUSTER_NAME}"; then
   echo "==> kind cluster '${CLUSTER_NAME}' already exists, reusing it"
@@ -47,7 +63,7 @@ helm dependency build chart/
 echo "==> Installing/upgrading Helm release '${RELEASE_NAME}' in namespace '${NAMESPACE}'..."
 helm upgrade --install "${RELEASE_NAME}" chart/ \
   --namespace "${NAMESPACE}" --create-namespace \
-  --timeout 10m "$@"
+  --timeout 10m ${HELM_ARGS[@]+"${HELM_ARGS[@]}"}
 
 cat <<'EOF'
 
