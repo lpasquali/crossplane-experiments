@@ -105,7 +105,6 @@ data:
       namespace: {{ .Values.claim.namespace }}
     spec:
       dbPassword: {{ .Values.claim.dbPassword | quote }}
-      enableGeoserver: {{ .Values.claim.enableGeoserver }}
       realmName: {{ .Values.claim.realmName | quote }}
       keycloakAdminPassword: {{ .Values.claim.keycloakAdminPassword | quote }}
       wordpressDbPassword: {{ .Values.claim.wordpressDbPassword | quote }}

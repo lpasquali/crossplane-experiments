@@ -33,6 +33,14 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: chart-registry
+      annotations:
+        # Force a rolling restart whenever the chart index/tarballs
+        # change (e.g. a wordpress chart version bump). Without this,
+        # the ConfigMap volume's kubelet-side symlink refresh can lag
+        # behind an already-reconciled `helm upgrade`, leaving
+        # provider-helm failing to pull the new chart version for a
+        # while even though the ConfigMap itself is already correct.
+        checksum/files: {{ printf "%s%s" (.Files.Get "files/index.yaml") (.Files.Get (printf "files/wordpress-%s.tgz" .Values.charts.wordpress.version) | b64enc) | sha256sum }}
     spec:
       containers:
         - name: nginx

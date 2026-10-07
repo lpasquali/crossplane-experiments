@@ -21,7 +21,19 @@ http {
 
     location /wordpress/ {
       set $wordpress_upstream wordpress.default.svc.cluster.local;
-      proxy_pass http://$wordpress_upstream/;
+      # IMPORTANT: proxy_pass's automatic "replace the matched location
+      # prefix" behavior only applies when its whole target is a
+      # compile-time-literal URL. Because the host here is a variable
+      # (needed for request-time DNS resolution, see `resolver` above),
+      # nginx disables that automatic rewriting and would otherwise
+      # forward only the literal path written after the host ("/"),
+      # collapsing every request (wp-login.php, static assets, etc.)
+      # to the upstream's "/" -- which is exactly what was happening.
+      # Fix: explicitly strip the "/wordpress" prefix ourselves via
+      # `rewrite ... break`, then use a URI-less proxy_pass so nginx
+      # forwards the already-rewritten $uri (+query string) as-is.
+      rewrite ^/wordpress/(.*)$ /$1 break;
+      proxy_pass http://$wordpress_upstream;
       # Pass through the real external Host header (not the internal
       # Service hostname): WordPress is configured (via WP_HOME /
       # WP_SITEURL constants) to expect this proxy's external
@@ -36,7 +48,10 @@ http {
 
     location /keycloak/ {
       set $keycloak_upstream keycloak-http.default.svc.cluster.local;
-      proxy_pass http://$keycloak_upstream/;
+      # See the /wordpress/ location above for why this rewrite+break
+      # is required whenever proxy_pass's host is a variable.
+      rewrite ^/keycloak/(.*)$ /$1 break;
+      proxy_pass http://$keycloak_upstream;
       proxy_set_header Host keycloak-http.default.svc.cluster.local;
       proxy_set_header X-Forwarded-Proto https;
       proxy_set_header X-Forwarded-For $remote_addr;

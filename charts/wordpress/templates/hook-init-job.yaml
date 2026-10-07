@@ -49,6 +49,27 @@ spec:
               {{- if .Values.oidc.enabled }}
               echo "Activating {{ .Values.oidc.pluginSlug }} plugin..."
               wp plugin activate {{ .Values.oidc.pluginSlug }} --path=/var/www/html --allow-root
+              # allow_internal_idp has no constant-override equivalent in
+              # this plugin (unlike client_id/endpoint URLs/etc.) -- it can
+              # ONLY be set via the openid_connect_generic_settings DB
+              # option. Without it, wp_safe_remote_post()/get() (WordPress's
+              # SSRF protection) silently blocks the token/userinfo
+              # exchange requests to Keycloak's in-cluster Service hostname
+              # ("A valid URL was not provided" / http_request_failed),
+              # since that hostname resolves to a private-network address.
+              # `wp option update` creates the option if it doesn't exist
+              # yet, and since no other code path writes this option
+              # before login is first attempted, a plain overwrite here is
+              # safe (nothing else to merge/preserve).
+              echo "Enabling allow_internal_idp for in-cluster Keycloak..."
+              wp option update openid_connect_generic_settings '{"allow_internal_idp":true}' --format=json --path=/var/www/html --allow-root
+              # Every account in this demo is meant to be backed by the
+              # single Keycloak "setup" realm (see OIDC_CREATE_IF_DOES_NOT_EXIST
+              # above), so any user who can authenticate there should land
+              # as a full WordPress Administrator rather than the
+              # WP-default Subscriber role.
+              echo "Setting default new-user role to administrator..."
+              wp option update default_role administrator --path=/var/www/html --allow-root
               {{- end }}
           env:
             - name: WORDPRESS_DB_HOST

@@ -188,6 +188,21 @@ spec:
                             key: admin-password
                       - name: KC_HOSTNAME_STRICT
                         value: "false"
+                      {{- if .Values.reverseProxy.enabled }}
+                      # Pin every browser-facing URL Keycloak generates
+                      # (login form action, redirects, issuer, etc.) to
+                      # the reverse-proxy's externally-reachable
+                      # /keycloak path, regardless of the Host header the
+                      # request actually arrived with. This does NOT
+                      # affect server-to-server calls (token/userinfo,
+                      # the provider-keycloak admin API), which keep
+                      # using the internal Service hostname directly --
+                      # only frontend/browser-redirect URLs are pinned.
+                      - name: KC_HOSTNAME
+                        value: "https://{{ .Values.reverseProxy.hostname }}:{{ .Values.reverseProxy.port }}/keycloak"
+                      - name: KC_HOSTNAME_BACKCHANNEL_DYNAMIC
+                        value: "true"
+                      {{- end }}
 
           # =================================================================
           # KEYCLOAK: Realm/User/Client (realm is the ONLY one WordPress may
@@ -234,7 +249,7 @@ spec:
                     kind: Secret
                     metadata:
                       name: keycloak-demo-user-password
-                      namespace: {{ .Release.Namespace }}
+                      namespace: default
                     type: Opaque
                     stringData:
                       password: ""
@@ -262,10 +277,100 @@ spec:
                   emailVerified: true
                   initialPassword:
                     - valueSecretRef:
-                        namespace: {{ .Release.Namespace }}
+                        namespace: default
                         name: keycloak-demo-user-password
                         key: password
                       temporary: false
+            patches:
+              - type: FromCompositeFieldPath
+                fromFieldPath: spec.realmName
+                toFieldPath: spec.forProvider.realmId
+
+          # -------------------------------------------------------------
+          # 7b. Import Keycloak's built-in "realm-management" client (auto
+          #     -created per realm, not something we create ourselves) so
+          #     we can reference its "realm-admin" composite role below.
+          # -------------------------------------------------------------
+          - name: keycloak-realm-management-client
+            base:
+              apiVersion: openidclient.keycloak.crossplane.io/v1alpha1
+              kind: Client
+              metadata:
+                name: setup-realm-management-client
+              spec:
+                # realm-management is a Keycloak-protected system client:
+                # it already exists (hence `import: true` below) but any
+                # PUT/update against it is rejected by Keycloak itself
+                # with 403, regardless of what we set here. Excluding
+                # "Update" stops Crossplane from perpetually retrying (and
+                # failing) that update every reconcile -- we only need
+                # this resource's observed external-name/ID so the Role
+                # below can reference it.
+                managementPolicies:
+                  - Observe
+                  - Create
+                  - LateInitialize
+                providerConfigRef:
+                  name: default
+                forProvider:
+                  realmId: "setup"
+                  clientId: "realm-management"
+                  accessType: "BEARER-ONLY"
+                  standardFlowEnabled: false
+                  directAccessGrantsEnabled: false
+                  implicitFlowEnabled: false
+                  serviceAccountsEnabled: false
+                  import: true
+            patches:
+              - type: FromCompositeFieldPath
+                fromFieldPath: spec.realmName
+                toFieldPath: spec.forProvider.realmId
+
+          # -------------------------------------------------------------
+          # 7c. Import the "realm-admin" role (a built-in composite role on
+          #     realm-management, granting full admin rights scoped to this
+          #     one realm only -- not global/master-realm admin).
+          # -------------------------------------------------------------
+          - name: keycloak-realm-admin-role
+            base:
+              apiVersion: role.keycloak.crossplane.io/v1alpha1
+              kind: Role
+              metadata:
+                name: setup-realm-admin-role
+              spec:
+                providerConfigRef:
+                  name: default
+                forProvider:
+                  realmId: "setup"
+                  name: "realm-admin"
+                  import: true
+                  clientIdRef:
+                    name: setup-realm-management-client
+            patches:
+              - type: FromCompositeFieldPath
+                fromFieldPath: spec.realmName
+                toFieldPath: spec.forProvider.realmId
+
+          # -------------------------------------------------------------
+          # 7d. Grant demo-user the realm-admin role, so they can manage
+          #     the "setup" realm itself (not just log in to WordPress).
+          # -------------------------------------------------------------
+          - name: keycloak-demo-user-roles
+            base:
+              apiVersion: user.keycloak.crossplane.io/v1alpha1
+              kind: Roles
+              metadata:
+                name: demo-user-roles
+              spec:
+                providerConfigRef:
+                  name: default
+                forProvider:
+                  realmId: "setup"
+                  exhaustive: false
+                  userIdRef:
+                    name: demo-user
+                  roleIdsRefs:
+                    - name: setup-realm-admin-role
             patches:
               - type: FromCompositeFieldPath
                 fromFieldPath: spec.realmName
@@ -323,6 +428,14 @@ spec:
                   validRedirectUris:
                     - "http://wordpress.default.svc.cluster.local/*"
                     - "http://wordpress.default.svc.cluster.local/wp-login.php?action=openid-connect-authorize"
+                    {{- if .Values.reverseProxy.enabled }}
+                    # The browser actually lands back on the reverse
+                    # proxy's externally-reachable URL (not the internal
+                    # Service hostname) after authenticating at Keycloak,
+                    # so that redirect target must be allow-listed too.
+                    - "https://{{ .Values.reverseProxy.hostname }}:{{ .Values.reverseProxy.port }}/wordpress/*"
+                    - "https://{{ .Values.reverseProxy.hostname }}:{{ .Values.reverseProxy.port }}/wordpress/wp-login.php?action=openid-connect-authorize"
+                    {{- end }}
             patches:
               - type: FromCompositeFieldPath
                 fromFieldPath: spec.realmName
@@ -473,6 +586,7 @@ spec:
                       loginUrl: ""
                       userinfoUrl: ""
                       tokenUrl: ""
+                      issuer: ""
             patches:
               - type: CombineFromComposite
                 combine:
@@ -480,7 +594,17 @@ spec:
                     - fromFieldPath: spec.realmName
                   strategy: string
                   string:
+                    {{- if .Values.reverseProxy.enabled }}
+                    # This URL is embedded directly as the browser's
+                    # "Login with OpenID Connect" link href, so (unlike
+                    # userinfo/token below, which the WordPress container
+                    # calls server-to-server over the internal Service
+                    # hostname) it MUST be reachable from outside the
+                    # cluster -- i.e. through the reverse proxy.
+                    fmt: "https://{{ .Values.reverseProxy.hostname }}:{{ .Values.reverseProxy.port }}/keycloak/realms/%s/protocol/openid-connect/auth"
+                    {{- else }}
                     fmt: "http://keycloak-http.default.svc.cluster.local/realms/%s/protocol/openid-connect/auth"
+                    {{- end }}
                 toFieldPath: spec.forProvider.values.oidc.loginUrl
               - type: CombineFromComposite
                 combine:
@@ -498,3 +622,23 @@ spec:
                   string:
                     fmt: "http://keycloak-http.default.svc.cluster.local/realms/%s/protocol/openid-connect/token"
                 toFieldPath: spec.forProvider.values.oidc.tokenUrl
+              - type: CombineFromComposite
+                combine:
+                  variables:
+                    - fromFieldPath: spec.realmName
+                  strategy: string
+                  string:
+                    # Keycloak's real token "iss" claim is scheme+host+port
+                    # PLUS the /realms/<realm> path (unlike what the OIDC
+                    # plugin derives from endpoint_login, which keeps only
+                    # scheme+host+port) -- set this explicitly so ID-token
+                    # issuer validation doesn't false-positive as
+                    # "invalid-iss". Must match whichever hostname KC_HOSTNAME
+                    # pins the token's "iss" claim to (external when the
+                    # reverse proxy is enabled, internal otherwise).
+                    {{- if .Values.reverseProxy.enabled }}
+                    fmt: "https://{{ .Values.reverseProxy.hostname }}:{{ .Values.reverseProxy.port }}/keycloak/realms/%s"
+                    {{- else }}
+                    fmt: "http://keycloak-http.default.svc.cluster.local/realms/%s"
+                    {{- end }}
+                toFieldPath: spec.forProvider.values.oidc.issuer

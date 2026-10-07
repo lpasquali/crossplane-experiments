@@ -84,12 +84,41 @@ spec:
                 define('WP_SITEURL', '{{ .Values.externalUrl }}');
                 {{- end }}
                 {{- if .Values.oidc.enabled }}
-                define('OPENID_CONNECT_GENERIC_CLIENT_ID', '{{ .Values.oidc.clientId }}');
-                define('OPENID_CONNECT_GENERIC_CLIENT_SECRET', getenv('OIDC_CLIENT_SECRET'));
-                define('OPENID_CONNECT_GENERIC_SCOPE', '{{ .Values.oidc.scope }}');
-                define('OPENID_CONNECT_GENERIC_ENDPOINT_LOGIN_URL', '{{ .Values.oidc.loginUrl }}');
-                define('OPENID_CONNECT_GENERIC_ENDPOINT_USERINFO_URL', '{{ .Values.oidc.userinfoUrl }}');
-                define('OPENID_CONNECT_GENERIC_ENDPOINT_TOKEN_URL', '{{ .Values.oidc.tokenUrl }}');
+                {{/*
+                  The daggerhart-openid-connect-generic plugin only reads
+                  a specific set of constant names (see its
+                  $environment_settings map in
+                  openid-connect-generic-option-settings.php) -- it does
+                  NOT recognize OPENID_CONNECT_GENERIC_* names. Using the
+                  wrong names silently no-ops (the plugin falls back to
+                  its empty/default settings, producing a login button
+                  with blank client_id/scope instead of an error).
+                */}}
+                define('OIDC_CLIENT_ID', '{{ .Values.oidc.clientId }}');
+                define('OIDC_CLIENT_SECRET', getenv('OIDC_CLIENT_SECRET'));
+                define('OIDC_CLIENT_SCOPE', '{{ .Values.oidc.scope }}');
+                define('OIDC_ENDPOINT_LOGIN_URL', '{{ .Values.oidc.loginUrl }}');
+                define('OIDC_ENDPOINT_USERINFO_URL', '{{ .Values.oidc.userinfoUrl }}');
+                define('OIDC_ENDPOINT_TOKEN_URL', '{{ .Values.oidc.tokenUrl }}');
+                {{/* The plugin derives its expected issuer by stripping
+                     everything but scheme+host+port off endpoint_login,
+                     which breaks for Keycloak (issuer is scheme+host+port
+                     *plus* the /realms/<realm> path). Set it explicitly
+                     to the real external issuer so ID-token validation
+                     (invalid-iss) doesn't false-positive. */}}
+                {{- if .Values.oidc.issuer }}
+                define('OIDC_ISSUER', '{{ .Values.oidc.issuer }}');
+                {{- end }}
+                {{- if .Values.oidc.logoutUrl }}
+                define('OIDC_ENDPOINT_LOGOUT_URL', '{{ .Values.oidc.logoutUrl }}');
+                {{- end }}
+                define('OIDC_LOGIN_TYPE', 'button');
+                {{/* Auto-provision a WP account for any user who can
+                     authenticate against the "setup" Keycloak realm --
+                     that realm membership is the only authentication
+                     gate for this demo. */}}
+                define('OIDC_CREATE_IF_DOES_NOT_EXIST', true);
+                define('OIDC_LINK_EXISTING_USERS', true);
                 {{- end }}
             {{- end }}
           volumeMounts:

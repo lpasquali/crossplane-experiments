@@ -24,10 +24,6 @@ spec:
                 dbPassword:
                   type: string
                   description: "Password for the PostgreSQL database backing Keycloak"
-                enableGeoserver:
-                  type: boolean
-                  default: true
-                  description: "Optionally deploy GeoServer alongside WordPress"
                 realmName:
                   type: string
                   default: "setup"

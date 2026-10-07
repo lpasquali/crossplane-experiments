@@ -40,7 +40,7 @@ charts:
   # nginx static file server, see templates/chart-registry.yaml), built
   # from charts/wordpress/ via scripts/build-charts.sh.
   wordpress:
-    version: 0.1.2
+    version: 0.1.6
 
 # =====================================================================
 # Reverse proxy exposing the demo over a single external URL:
@@ -67,7 +67,6 @@ claim:
   name: dev-environment
   namespace: default
   dbPassword: "SuperSecurePass123!"
-  enableGeoserver: true
   realmName: "setup"
   keycloakAdminPassword: "KeycloakAdminPass123!"
   wordpressDbPassword: "WordPressDbPass123!"

@@ -61,6 +61,8 @@ oidc:
   loginUrl: ""
   userinfoUrl: ""
   tokenUrl: ""
+  logoutUrl: ""
+  issuer: ""
 
 resources: {}
 
