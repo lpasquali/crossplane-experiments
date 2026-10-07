@@ -88,8 +88,8 @@ spec:
               # where a Release's own Ready condition can get stuck at
               # "False"/Unavailable from an earlier transient hook-Job
               # timeout even after status.atProvider.state has genuinely
-              # settled to "deployed" (see README's "benign/cosmetic
-              # quirk" note) -- the Composite/Claim's rolled-up Ready
+              # settled to "deployed" (see README's Architecture notes
+              # on the smoke test) -- the Composite/Claim's rolled-up Ready
               # condition inherits that same stale False forever, so
               # waiting on it here could block indefinitely despite the
               # environment actually working fine. Log it best-effort,

@@ -57,6 +57,15 @@ has no state outside it, since Vault runs in dev/in-memory mode):
 ./scripts/destroy.sh
 ```
 
+To also remove everything `deploy.sh` downloads or generates locally
+(the Helm repos it registers, the dependency tarballs in `chart/charts/`,
+and the packaged WordPress chart + `index.yaml` in `chart/files/` — all
+git-ignored, not committed), without touching the cluster:
+
+```bash
+./scripts/purge.sh
+```
+
 Equivalently, by hand:
 
 ```bash
@@ -64,7 +73,12 @@ Equivalently, by hand:
 #    reverse-proxy URL below).
 kind create cluster --config kind-config.yaml
 
-# 2. Install everything: Crossplane, CloudNativePG, mariadb-operator,
+# 2. Package the WordPress chart and fetch the dependency charts (needs
+#    the `helm repo add` commands from scripts/deploy.sh first).
+./scripts/build-charts.sh
+helm dependency build chart/
+
+# 3. Install everything: Crossplane, CloudNativePG, mariadb-operator,
 #    providers, the XRD/Composition, the in-cluster chart registry, the
 #    reverse proxy, and (by default) a demo claim instantiating the
 #    full WordPress+Keycloak+MariaDB+Postgres stack.
@@ -78,7 +92,8 @@ Realm/User/Client wiring) reconciles automatically. Re-run
 time you change something.
 
 If you change the self-authored WordPress chart under `charts/wordpress/`,
-regenerate the embedded package/index first:
+regenerate the embedded package/index first (the output in
+`chart/files/` is git-ignored and rebuilt on every `deploy.sh` run):
 
 ```bash
 ./scripts/build-charts.sh
@@ -172,7 +187,7 @@ To reach it from your host:
 
 ## Architecture
 
-See `chart/templates/04-composition.yaml` for the full Crossplane
+See `chart/manifests/composition.yaml` for the full Crossplane
 Composition. Key points:
 
 ```mermaid
@@ -250,7 +265,12 @@ flowchart TB
   that polls for the CRDs before applying.
 - A second, later-running `post-install,post-upgrade` hook Job
   (`chart/templates/post-install-smoketest.yaml`) waits for the
-  WordPress `Deployment` to actually roll out and then performs a real
+  WordPress `Deployment` to report a ready replica (polling
+  `status.readyReplicas` rather than `kubectl rollout status`, which
+  keeps failing once the Deployment's progress deadline has been
+  exceeded during a slow first image pull, even if the pods become Ready
+  later), checks WordPress answers over HTTP (printing the `curl` exit
+  code if it doesn't), and then performs a real
   Keycloak OIDC password-grant login as the demo user, failing the
   `helm install`/`helm upgrade` itself (non-zero exit) if either check
   doesn't pass — so a `helm` command reporting success is real
@@ -276,7 +296,7 @@ flowchart TB
 
 ### Changing a vaulted secret's value directly in the Vault UI
 
-Every secret in the table above (`keycloak/db-credentials`,
+Every vaulted secret (`keycloak/db-credentials`,
 `keycloak/admin-secret`, `keycloak/demo-user-password`,
 `wordpress/oidc-client-secret`, `wordpress/mariadb-credentials`,
 `wordpress/admin-secret`) is reachable and editable through the Vault
