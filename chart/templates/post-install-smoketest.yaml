@@ -134,7 +134,7 @@ spec:
               kubectl rollout status deployment/wordpress -n default --timeout=600s
 
               echo "==> Confirming WordPress responds over HTTP (internal Service)..."
-              WP_CODE=$(curl -sk -o /dev/null -w '%{http_code}' --max-time 10 "$WP_URL/")
+              WP_CODE=$(curl -sk -o /dev/null -w '%{http_code}' --max-time 10 "$WP_URL/") || WP_CODE="curl-failed(exit $?)"
               echo "    WordPress HTTP status: $WP_CODE"
               case "$WP_CODE" in
                 2??|3??) ;;
