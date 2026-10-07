@@ -1,0 +1,25 @@
+{{- if .Values.reverseProxy.enabled }}
+crossplane-experiments is installing. Once the Crossplane claim has
+finished reconciling (see "Checking it's working" in the README), the
+whole demo is reachable through a single external URL:
+
+  https://{{ .Values.reverseProxy.hostname }}:{{ .Values.reverseProxy.port }}/wordpress
+      -> WordPress (OIDC login via Keycloak's "setup" realm)
+
+  https://{{ .Values.reverseProxy.hostname }}:{{ .Values.reverseProxy.port }}/keycloak
+      -> Keycloak (master realm admin console / general access)
+
+  https://{{ .Values.reverseProxy.hostname }}:{{ .Values.reverseProxy.port }}/keycloak-faggeta
+      -> redirects to https://{{ .Values.reverseProxy.hostname }}:{{ .Values.reverseProxy.port }}/keycloak/admin/faggeta/console
+         (Keycloak "faggeta" realm admin console)
+
+Make sure {{ .Values.reverseProxy.hostname }} resolves to your host
+(e.g. `echo "127.0.0.1 {{ .Values.reverseProxy.hostname }}" | sudo tee -a /etc/hosts`)
+and that the kind cluster was created with `kind-config.yaml` (maps
+host port {{ .Values.reverseProxy.port }} -> NodePort {{ .Values.reverseProxy.nodePort }}).
+The TLS certificate is self-signed, so accept the browser warning.
+{{- else }}
+crossplane-experiments is installing. The reverse proxy is disabled
+(reverseProxy.enabled=false), so access WordPress/Keycloak directly via
+their in-cluster Services instead (see the README).
+{{- end }}

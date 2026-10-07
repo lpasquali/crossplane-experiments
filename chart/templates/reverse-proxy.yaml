@@ -2,8 +2,10 @@
 # Reverse proxy exposing the whole demo over a single external URL
 # (https://{{ .Values.reverseProxy.hostname }}:{{ .Values.reverseProxy.port }}),
 # path-routing:
-#   /wordpress -> the WordPress Service (default/wordpress)
-#   /keycloak  -> the Keycloak Service (default/keycloak-http)
+#   /wordpress        -> the WordPress Service (default/wordpress)
+#   /keycloak         -> the Keycloak Service (default/keycloak-http)
+#   /keycloak-faggeta -> client-side redirect to the Keycloak "faggeta"
+#                        realm's admin console (/keycloak/admin/faggeta/console)
 #
 # This is plain nginx (official image, non-Bitnami) terminating TLS with
 # a self-signed cert generated at install time via Helm's

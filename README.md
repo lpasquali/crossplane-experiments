@@ -61,10 +61,19 @@ kubectl get pods -n default
 ### Single external URL
 
 The chart also deploys a small nginx reverse proxy (self-signed TLS)
-exposing both apps under one address:
+exposing everything under one address. All of these URLs are also
+printed by `helm install`/`helm upgrade` itself (see
+`chart/templates/NOTES.txt`), so you don't need to hunt for them here:
 
-- `https://crossplane-experiment:9443/wordpress`
-- `https://crossplane-experiment:9443/keycloak`
+- `https://crossplane-experiment:9443/wordpress` -> WordPress
+  (OIDC login via Keycloak's `setup` realm)
+- `https://crossplane-experiment:9443/keycloak` -> Keycloak
+  (master realm admin console / general access)
+- `https://crossplane-experiment:9443/keycloak-faggeta` -> a
+  client-side (302) redirect straight to
+  `https://crossplane-experiment:9443/keycloak/admin/faggeta/console`,
+  i.e. the Keycloak `faggeta` realm's admin console, still served
+  through the same `/keycloak` proxy path above
 
 To reach it from your host:
 
@@ -74,15 +83,19 @@ To reach it from your host:
    ```
 2. Make sure the kind cluster was created with `kind-config.yaml`
    (maps host port `9443` -> the reverse proxy's NodePort `30443`).
-3. Browse to `https://crossplane-experiment:9443/wordpress` or
-   `/keycloak` (accept the self-signed certificate warning).
+3. Browse to any of the URLs above (accept the self-signed certificate
+   warning).
 
-> Note: WordPress and Keycloak both use their internal Service DNS
-> names as their own site/base URL, so some deep links/assets reached
-> through the proxy may still point at the internal hostname. This URL
-> is primarily meant to let you quickly confirm both apps are up and
-> serving real pages (login screens, HTTP 200s) through one address,
-> not as a production-grade ingress.
+> Note: all browser-facing URLs are pinned to this proxy address, not
+> the internal Service hostnames — WordPress's `WP_HOME`/`WP_SITEURL`,
+> Keycloak's `KC_HOSTNAME`, and the OIDC login/issuer URLs all resolve
+> to `https://crossplane-experiment:9443/...` (see `externalUrl` in
+> `chart/manifests/composition.yaml` and the `keycloakx` chart's
+> `KC_HOSTNAME`/`KC_HOSTNAME_BACKCHANNEL_DYNAMIC` env vars). Only
+> server-to-server calls that never go through a browser (OIDC
+> token/userinfo exchange, the provider-keycloak admin API, DB
+> connections) keep using internal Service DNS, since those never need
+> to be reachable from outside the cluster.
 
 ## Architecture
 
