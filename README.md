@@ -33,6 +33,31 @@ an official upstream chart/image or self-authored:
 ## One-command install
 
 ```bash
+./scripts/deploy.sh
+```
+
+This creates the kind cluster `cnpg-crossplane` (if it doesn't already
+exist, using `kind-config.yaml` - includes the port mapping used by the
+reverse-proxy URL below), (re)packages the self-authored WordPress chart,
+refreshes the umbrella chart's Helm dependencies, and
+`helm upgrade --install`s everything: Crossplane, CloudNativePG,
+mariadb-operator, providers, the XRD/Composition, the in-cluster chart
+registry, the reverse proxy, and (by default) a demo claim instantiating
+the full WordPress+Keycloak+MariaDB+Postgres stack. It's safe to re-run
+any time you change something - the cluster is reused and the Helm
+release is upgraded in place. Any extra arguments are passed straight
+through to `helm upgrade --install` (e.g. `./scripts/deploy.sh --debug`).
+
+To tear everything down (deletes the kind cluster entirely - the demo
+has no state outside it, since Vault runs in dev/in-memory mode):
+
+```bash
+./scripts/destroy.sh
+```
+
+Equivalently, by hand:
+
+```bash
 # 1. Create the kind cluster (includes the port mapping used by the
 #    reverse-proxy URL below).
 kind create cluster --config kind-config.yaml
