@@ -15,7 +15,11 @@ whole demo is reachable through a single external URL:
 
   https://{{ .Values.reverseProxy.hostname }}:{{ .Values.reverseProxy.port }}/vault
       -> redirects to https://{{ .Values.reverseProxy.hostname }}:{{ .Values.reverseProxy.port }}/ui/
-         (Vault UI; dev-mode root token is "root")
+{{- if and .Values.vault.enabled .Values.vault.server.dev.enabled }}
+         (Vault UI; dev-mode root token: {{ .Values.vault.server.dev.devRootToken }})
+{{- else }}
+         (Vault UI)
+{{- end }}
 
   https://{{ .Values.reverseProxy.hostname }}:{{ .Values.reverseProxy.port }}/ui/
       -> Vault UI directly (Vault hardcodes its own UI/API to the
@@ -35,4 +39,10 @@ The TLS certificate is self-signed, so accept the browser warning.
 crossplane-experiments is installing. The reverse proxy is disabled
 (reverseProxy.enabled=false), so access WordPress/Keycloak directly via
 their in-cluster Services instead (see the README).
+{{- if and .Values.vault.enabled .Values.vault.server.dev.enabled }}
+
+Vault is running in dev mode; root token: {{ .Values.vault.server.dev.devRootToken }}
+Reach its UI/API via `kubectl port-forward -n {{ .Release.Namespace }} svc/vault 8200:8200`
+then browse to http://localhost:8200/ui/.
+{{- end }}
 {{- end }}
