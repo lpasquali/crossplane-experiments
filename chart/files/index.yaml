@@ -3,17 +3,17 @@ entries:
   wordpress:
   - apiVersion: v2
     appVersion: 6.7-apache
-    created: "2026-10-07T13:18:48.101015286Z"
+    created: "2026-10-07T17:04:36.418782344Z"
     description: 'Minimal WordPress chart built on the official "wordpress" Docker
       image (no Bitnami). Ships the daggerhart-openid-connect-generic plugin via an
       init container and activates it (plus runs the initial `wp core install`) via
       a post-install/post-upgrade Helm hook Job using the official "wordpress:cli"
       image. Designed to run against an external MariaDB/MySQL database (e.g. one
       created by mariadb-operator) and a Keycloak OIDC provider. '
-    digest: a74fd1f34937472ebafdfb3387f229d0ef6ad29670bbc74052d7f07e5af8a6db
+    digest: 7670b8c22a3c8815f0a7a47208b5e4cbea937513ef40929e51b59a1f9183e94d
     name: wordpress
     type: application
     urls:
-    - wordpress-0.1.7.tgz
-    version: 0.1.7
-generated: "2026-10-07T13:18:48.100478116Z"
+    - wordpress-0.1.8.tgz
+    version: 0.1.8
+generated: "2026-10-07T17:04:36.417471542Z"
