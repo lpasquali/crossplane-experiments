@@ -131,7 +131,23 @@ spec:
                 echo "    deployment/wordpress not created yet, retrying..."
                 sleep 5
               done
-              kubectl rollout status deployment/wordpress -n default --timeout=600s
+              # Poll ground truth (ready replicas) rather than `rollout status`,
+              # which fails permanently once the Deployment's progressDeadline
+              # has been exceeded during a slow first pull, even if the pods
+              # become Ready afterwards.
+              attempt=0
+              until [ "$(kubectl get deployment/wordpress -n default -o jsonpath='{.status.readyReplicas}')" -ge 1 ] 2>/dev/null; do
+                attempt=$((attempt + 1))
+                if [ "$attempt" -ge 120 ]; then
+                  echo "WordPress deployment never got a ready replica:"
+                  kubectl get deployment/wordpress -n default -o wide || true
+                  kubectl get pods -n default -l app.kubernetes.io/name=wordpress || true
+                  kubectl describe deployment/wordpress -n default | tail -20 || true
+                  exit 1
+                fi
+                echo "    attempt $attempt/120: wordpress not ready yet, retrying in 10s..."
+                sleep 10
+              done
 
               echo "==> Confirming WordPress responds over HTTP (internal Service)..."
               WP_CODE=$(curl -sk -o /dev/null -w '%{http_code}' --max-time 10 "$WP_URL/") || WP_CODE="curl-failed(exit $?)"
