@@ -75,7 +75,9 @@ printed by `helm install`/`helm upgrade` itself (see
   i.e. the Keycloak `faggeta` realm's admin console, still served
   through the same `/keycloak` proxy path above
 - `https://crossplane-experiment:9443/vault` -> a client-side (302)
-  redirect to Vault's UI at `/ui/` (dev-mode root token is `root`)
+  redirect to Vault's UI at `/ui/` (dev-mode root token is `root` — see
+  "Changing a vaulted secret's value directly in the Vault UI" below
+  before editing anything there)
 - `https://crossplane-experiment:9443/ui/` and `/v1/` -> Vault's UI
   and API directly (Vault hardcodes these absolute paths itself, so
   unlike WordPress/Keycloak it can't be rebased under a `/vault`
@@ -188,3 +190,60 @@ flowchart TB
   asynchronously by Crossplane's package manager are applied via a
   `post-install,post-upgrade` hook Job (`chart/templates/bootstrap-apply.yaml`)
   that polls for the CRDs before applying.
+
+### Changing a vaulted secret's value directly in the Vault UI
+
+Every secret in the table above (`keycloak/db-credentials`,
+`keycloak/admin-secret`, `keycloak/demo-user-password`,
+`wordpress/oidc-client-secret`, `wordpress/mariadb-credentials`,
+`wordpress/admin-secret`) is reachable and editable through the Vault
+UI (`/vault` or `/ui/`, see "Single external URL" above). **Editing
+one of these values directly in Vault is not an effective, durable, or
+safe way to rotate a credential in this demo** — for cybersecurity
+awareness, here's exactly why, tracing the actual data flow in
+`chart/templates/_helpers.tpl`'s `vaultBackedSecret` helper:
+
+```
+XAppEnvironment claim's spec.<field> (e.g. spec.dbPassword)
+   --(Crossplane patch, continuously enforced)-->
+plain Kubernetes Secret (<id>-vault-source)
+   --(provider-vault SecretV2, continuously enforced)-->
+Vault KV path (e.g. keycloak/db-credentials)   <-- you'd edit here
+   --(ExternalSecret, refreshInterval: 1m, pull-only)-->
+Kubernetes Secret actually consumed by the app (e.g. keycloak-db-credentials)
+   --(read once, at pod start / DB bootstrap only)-->
+the running Postgres role password / app's in-memory config
+```
+
+If you edit the value **in Vault**, the following happens:
+
+1. Within about a minute, the `ExternalSecret` will pull your edited
+   value and overwrite the consumer Kubernetes `Secret` with it.
+2. **Crossplane will eventually revert it anyway**: the `SecretV2`
+   resource keeps declaratively pushing the *original* value (derived
+   from the claim's `spec.<field>`) back into that same Vault path on
+   its own reconcile loop — your edit is not durable.
+3. **The actual credential never rotates**: CloudNativePG only reads
+   `keycloak-db-credentials`/`wordpress-mariadb-credentials` once, at
+   database bootstrap (no CNPG `managed.roles` is configured here), and
+   Keycloak/WordPress only read their secrets as env vars at pod
+   startup. Neither Postgres's real role password, MariaDB's real user
+   password, nor a running pod's in-memory config changes just because
+   the Vault value changed.
+4. **This can cause an outage with no real security benefit**: if the
+   affected pod happens to restart while your edited (now-mismatched)
+   value is live in its Secret, it will try to authenticate with the
+   wrong credential and crash-loop until the Secret reverts back to the
+   correct value (step 2) or you manually fix the backing datastore to
+   match.
+
+**To actually rotate a credential**, change the corresponding field
+(`dbPassword`, `keycloakAdminPassword`, `demoUserPassword`,
+`oidcClientSecret`, `wordpressDbPassword`, `wordpressAdminPassword`) on
+the `AppEnvironment` claim itself (`helm upgrade` with a new value, or
+`kubectl edit appenvironment dev-environment`) — that's the one place
+Crossplane treats as the actual source of truth — **and** separately
+rotate the real credential in the backing system it protects (e.g. run
+`ALTER USER ... PASSWORD ...` in Postgres/MariaDB, or re-run the
+Keycloak admin/user password reset via its own API/console) so the two
+stay in sync. This demo has no automation for that second step.
