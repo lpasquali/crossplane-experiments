@@ -3,7 +3,9 @@
 A single Helm "umbrella" chart that stands up a complete demo of a
 Crossplane Composition provisioning **WordPress + Keycloak + MariaDB
 (for WordPress) + PostgreSQL (for Keycloak)**, with WordPress
-authenticating exclusively against Keycloak's `setup` realm via OIDC.
+authenticating exclusively, via OIDC, against a single dedicated
+Keycloak realm named by the Claim's `realmName` field (`faggeta` by
+default) — **never** Keycloak's own `master` realm.
 
 Every password/secret this demo uses (DB passwords, Keycloak admin
 password, etc) is generated and stored **only in HashiCorp Vault** —
@@ -102,24 +104,27 @@ flowchart LR
     Browser(("🌐 Your browser"))
     Browser == "https://crossplane-experiment:9443" ==> Proxy["Reverse proxy\n(nginx, self-signed TLS)"]
 
-    Proxy -- "/wordpress" --> WP["WordPress\nOIDC login via Keycloak's 'setup' realm"]
+    Proxy -- "/wordpress" --> WP["WordPress\nOIDC login via the demo realm"]
     Proxy -- "/keycloak" --> KC["Keycloak\nmaster realm admin console"]
-    Proxy -. "/keycloak-&lt;realm&gt;\n(302 redirect)" .-> KC
+    Proxy -. "/keycloak-faggeta\n(302 redirect)" .-> KCF["Keycloak\n'faggeta' realm admin console\n(same KC instance, different realm)"]
     Proxy -. "/vault\n(302 redirect)" .-> UI
     Proxy -- "/ui/, /v1/" --> UI["Vault UI + API\n(dev-mode root token: see helm output)"]
 
-    WP -. "OIDC login" .-> KC
+    WP -. "OIDC login\n(realm = Claim.spec.realmName,\ndefault 'faggeta' - NOT master)" .-> KCF
 ```
 
 - `https://crossplane-experiment:9443/wordpress` -> WordPress
-  (OIDC login via Keycloak's `setup` realm)
+  (OIDC login against the realm named by the Claim's `realmName` field,
+  `faggeta` by default — **never** the `master` realm)
 - `https://crossplane-experiment:9443/keycloak` -> Keycloak
-  (master realm admin console / general access)
+  (`master` realm admin console / general access — unrelated to the
+  realm WordPress logs into)
 - `https://crossplane-experiment:9443/keycloak-faggeta` -> a
   client-side (302) redirect straight to
   `https://crossplane-experiment:9443/keycloak/admin/faggeta/console`,
-  i.e. the Keycloak `faggeta` realm's admin console, still served
-  through the same `/keycloak` proxy path above
+  i.e. the **same Keycloak instance**, but the `faggeta` realm's own
+  admin console — the realm WordPress actually authenticates against,
+  still served through the same `/keycloak` proxy path above
 - `https://crossplane-experiment:9443/vault` -> a client-side (302)
   redirect to Vault's UI at `/ui/` (dev-mode root token is `root` — see
   "Changing a vaulted secret's value directly in the Vault UI" below
@@ -201,7 +206,7 @@ flowchart TB
     ES -- "K8s Secret" --> WPDB
 
     KCPG -- "Postgres" --> KC
-    KC -- "OIDC (realms/setup only)" --> WP
+    KC -- "OIDC (Claim.spec.realmName realm only,\ndefault 'faggeta' - NOT master)" --> WP
     REALM -- "configures" --> KC
     WPDB -- "MariaDB" --> WP
 
@@ -230,8 +235,11 @@ flowchart TB
   values, `provider-kubernetes` Objects) reading a plain Secret,
   unchanged.
 - WordPress's OIDC plugin (`daggerhart-openid-connect-generic`) is
-  configured with endpoint URLs hardcoded to `realms/setup` only — it
-  cannot authenticate against any other Keycloak realm.
+  configured with endpoint URLs locked to a single realm — whichever
+  one the Claim's `spec.realmName` resolves to (`faggeta` by default,
+  **not** `master`, and not the literal string "setup" either; see
+  `composition.yaml`'s `keycloak-realm` resource) — it cannot
+  authenticate against any other Keycloak realm.
 - The self-authored WordPress chart (`charts/wordpress/`) is packaged
   and served from an in-cluster classic Helm chart repository (plain
   HTTP, not OCI — see the note in `chart/templates/chart-registry.yaml`
@@ -298,16 +306,62 @@ live database credential, with no manual steps or restarts required:
   **not** part of this rotation path — only the WordPress application
   user is automated.
 
-#### Every other secret (`keycloak/admin-secret`, `keycloak/demo-user-password`, `wordpress/oidc-client-secret`, `wordpress/admin-secret`) — **manual rotation + restart required**
+#### `keycloak/demo-user-password` — **auto-rotated (composition-native CronJob)**
 
-Keycloak and WordPress only read these as environment variables at pod
-startup — there is no operator watching them for live changes. If you
-edit one of these in Vault:
+Keycloak's Admin REST API has no endpoint to read back a user's
+current password, so `provider-keycloak`'s `User.spec.forProvider.
+initialPassword` field is (by design — hence the name) create-only:
+it's never re-applied after the user first exists, so there's nothing
+a native Crossplane patch/diff can reconcile here. Instead,
+`composition.yaml` composes a `keycloak-demo-user-password-sync`
+`CronJob` (a plain `kubernetes.crossplane.io/v1alpha1 Object`, same
+idiom as `bootstrap-apply`) that runs every minute and unconditionally
+`PUT`s the current value of the `keycloak-demo-user-password` Secret
+to Keycloak's `reset-password` endpoint, authenticating with the admin
+credential built elsewhere in the same Composition. Repeating the same
+write every tick — rather than diffing — **is** Crossplane's
+reconcile-to-desired-state idempotency, just expressed via Keycloak's
+write-only API instead of a diffable CRD field. Live-tested: editing
+this Vault path fully propagates to a working Keycloak login within
+about a minute, no manual steps.
 
-1. **The actual credential never rotates on its own.** Neither
-   Keycloak's admin/demo-user password, the OIDC client secret, nor
-   WordPress's admin password changes just because the Vault value
-   changed — only the Kubernetes `Secret` does.
+#### `wordpress/oidc-client-secret` — **auto-rotated (native `provider-keycloak` reconciliation, slower cycle)**
+
+Unlike `initialPassword`, the `Client.spec.forProvider.
+clientSecretSecretRef` field is a regular (non-"initial") field, so
+`provider-keycloak` *does* continuously reconcile it — editing this
+Vault path does eventually change the real Keycloak client secret, no
+extra automation needed. The catch: `provider-keycloak`'s poll/reconcile
+interval for this resource is noticeably slower than the `ExternalSecret`'s
+1-minute `refreshInterval` (live-tested at ~5 minutes), so don't be
+fooled by a quick check showing no change — give it longer. WordPress
+itself still needs a manual restart afterwards (see below).
+
+#### `keycloak/admin-secret` and `wordpress/admin-secret` — **manual rotation + restart required, by design**
+
+These two are intentionally left out of any auto-rotation:
+
+- `keycloak/admin-secret` is Keycloak's root/break-glass admin
+  credential — it's also what `provider-keycloak`'s own `ProviderConfig`
+  uses to authenticate to Keycloak's Admin API for *every* other
+  managed resource. Automating its rotation hits a genuine
+  chicken-and-egg problem: whatever job rotates it would need to keep
+  authenticating with the very credential it's replacing mid-flight.
+  Real-world practice treats root credentials like this the same way —
+  deliberate, manual, ceremony-gated rotation, not silent background
+  automation.
+- `wordpress/admin-secret` is set once via `wp-cli` inside WordPress's
+  init container — there's no Keycloak (or any operator) involved at
+  all, so the composition-native CronJob trick used above doesn't
+  apply; rotating it for real would need a different mechanism
+  entirely (e.g. `kubectl exec`-based `wp-cli` invocation with
+  dedicated RBAC).
+
+Keycloak and WordPress only read these two as environment variables at
+pod startup — there is no operator watching them for live changes. If
+you edit one of these in Vault:
+
+1. **The actual credential never rotates on its own.**
 2. **This can cause an outage with no real security benefit on its
    own**: if the affected pod happens to restart while your edited
    (now-mismatched) value is live in its Secret, it will try to
@@ -318,10 +372,6 @@ edit one of these in Vault:
 **To actually rotate one of these**, edit the value in Vault (or
 `kubectl delete secret <consumer-secret>` to force an immediate
 `ExternalSecret` re-sync) **and** separately rotate the real credential
-through Keycloak's own admin API/console, **and** restart the
-consumer pod so it picks up the new value — so both stay in sync.
-This demo has no automation for these; it's left as an exercise for a
-production-grade follow-up (e.g. a Keycloak `User`/`Client` reconciler
-equivalent to CNPG's `DatabaseRole`, if/when `provider-keycloak`
-grows one).
+through Keycloak's own admin API/console or `wp-cli`, **and** restart
+the consumer pod so it picks up the new value — so both stay in sync.
 

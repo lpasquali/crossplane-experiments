@@ -344,6 +344,102 @@ spec:
                 toFieldPath: spec.forProvider.email
 
           # -------------------------------------------------------------
+          # 7a. Keycloak's Admin REST API never returns a user's current
+          #     password, so provider-keycloak's User.initialPassword is
+          #     (by design, hence the name) a create-only field: it is
+          #     never re-applied after the user first exists, so rotating
+          #     keycloak/demo-user-password in Vault alone does NOT change
+          #     the live Keycloak password (verified live).
+          #
+          #     This CronJob is the composition-native fix: instead of
+          #     diffing (impossible here), it unconditionally re-PUTs the
+          #     desired password to Keycloak's reset-password endpoint on
+          #     every run. Repeating the same write every tick *is*
+          #     Crossplane's reconcile-to-desired-state idempotency,
+          #     expressed via Keycloak's write-only API instead of a
+          #     diffable CRD field. Safe/idempotent to run as often as
+          #     desired; every run is a no-op in effect once the live
+          #     password already matches Vault's current value.
+          # -------------------------------------------------------------
+          - name: keycloak-demo-user-password-sync
+            base:
+              apiVersion: kubernetes.crossplane.io/v1alpha1
+              kind: Object
+              spec:
+                providerConfigRef:
+                  name: default
+                forProvider:
+                  manifest:
+                    apiVersion: batch/v1
+                    kind: CronJob
+                    metadata:
+                      name: keycloak-demo-user-password-sync
+                      namespace: default
+                    spec:
+                      schedule: "*/1 * * * *"
+                      concurrencyPolicy: Forbid
+                      successfulJobsHistoryLimit: 1
+                      failedJobsHistoryLimit: 3
+                      jobTemplate:
+                        spec:
+                          backoffLimit: 2
+                          activeDeadlineSeconds: 60
+                          template:
+                            spec:
+                              restartPolicy: Never
+                              containers:
+                                - name: reset-password
+                                  image: curlimages/curl:8.10.1
+                                  env:
+                                    - name: REALM
+                                      value: "setup"
+                                    - name: USERNAME
+                                      value: "demo-user"
+                                    - name: KC_URL
+                                      value: "http://keycloak-http.default.svc.cluster.local{{ $kcPath }}"
+                                    - name: ADMIN_PASSWORD
+                                      valueFrom:
+                                        secretKeyRef:
+                                          name: keycloak-admin-secret
+                                          key: admin-password
+                                    - name: DEMO_PASSWORD
+                                      valueFrom:
+                                        secretKeyRef:
+                                          name: keycloak-demo-user-password
+                                          key: password
+                                  command:
+                                    - sh
+                                    - -c
+                                    - |
+                                      set -e
+                                      TOKEN=$(curl -sf -X POST "$KC_URL/realms/master/protocol/openid-connect/token" \
+                                        -d grant_type=password -d client_id=admin-cli \
+                                        -d username=admin -d "password=$ADMIN_PASSWORD" \
+                                        | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p')
+                                      if [ -z "$TOKEN" ]; then
+                                        echo "Could not obtain admin token (Keycloak not ready yet?); will retry next run."
+                                        exit 1
+                                      fi
+                                      USER_ID=$(curl -sf -H "Authorization: Bearer $TOKEN" \
+                                        "$KC_URL/admin/realms/$REALM/users?username=$USERNAME" \
+                                        | sed -n 's/.*"id":"\([^"]*\)".*/\1/p' | head -1)
+                                      if [ -z "$USER_ID" ]; then
+                                        echo "User $USERNAME not found yet in realm $REALM; will retry next run."
+                                        exit 1
+                                      fi
+                                      curl -sf -X PUT -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+                                        -d "{\"type\":\"password\",\"value\":\"$DEMO_PASSWORD\",\"temporary\":false}" \
+                                        "$KC_URL/admin/realms/$REALM/users/$USER_ID/reset-password"
+                                      echo "demo-user password reconciled to current Vault value."
+            patches:
+              - type: FromCompositeFieldPath
+                fromFieldPath: spec.realmName
+                toFieldPath: spec.forProvider.manifest.spec.jobTemplate.spec.template.spec.containers[0].env[0].value
+              - type: FromCompositeFieldPath
+                fromFieldPath: spec.demoUserName
+                toFieldPath: spec.forProvider.manifest.spec.jobTemplate.spec.template.spec.containers[0].env[1].value
+
+          # -------------------------------------------------------------
           # 7b. Import Keycloak's built-in "realm-management" client (auto
           #     -created per realm, not something we create ourselves) so
           #     we can reference its "realm-admin" composite role below.
