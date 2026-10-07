@@ -1,3 +1,7 @@
+{{- $urlPath := "" }}
+{{- if .Values.externalUrl }}
+{{- $urlPath = (urlParse .Values.externalUrl).path }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -13,6 +17,12 @@ spec:
     metadata:
       labels:
         {{- include "wordpress.selectorLabels" . | nindent 8 }}
+      {{- if and $urlPath (ne $urlPath "/") }}
+      annotations:
+        # Forces a pod restart whenever the Apache sub-path Alias
+        # config changes, since it's read once at container startup.
+        checksum/apache-subpath: {{ include (print $.Template.BasePath "/apache-subpath-configmap.yaml") . | sha256sum }}
+      {{- end }}
     spec:
       {{- if .Values.oidc.enabled }}
       # Downloads (idempotently) the daggerhart-openid-connect-generic
@@ -126,6 +136,12 @@ spec:
           volumeMounts:
             - name: wp-data
               mountPath: /var/www/html
+            {{- if and $urlPath (ne $urlPath "/") }}
+            - name: apache-subpath
+              mountPath: /etc/apache2/conf-enabled/zz-subpath.conf
+              subPath: subpath.conf
+              readOnly: true
+            {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
       {{- with .Values.nodeSelector }}
@@ -144,3 +160,8 @@ spec:
         - name: wp-data
           persistentVolumeClaim:
             claimName: {{ include "wordpress.fullname" . }}
+        {{- if and $urlPath (ne $urlPath "/") }}
+        - name: apache-subpath
+          configMap:
+            name: {{ include "wordpress.fullname" . }}-apache-subpath
+        {{- end }}

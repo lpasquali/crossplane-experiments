@@ -13,6 +13,19 @@ whole demo is reachable through a single external URL:
       -> redirects to https://{{ .Values.reverseProxy.hostname }}:{{ .Values.reverseProxy.port }}/keycloak/admin/faggeta/console
          (Keycloak "faggeta" realm admin console)
 
+  https://{{ .Values.reverseProxy.hostname }}:{{ .Values.reverseProxy.port }}/vault
+      -> redirects to https://{{ .Values.reverseProxy.hostname }}:{{ .Values.reverseProxy.port }}/ui/
+         (Vault UI; dev-mode root token is "root")
+
+  https://{{ .Values.reverseProxy.hostname }}:{{ .Values.reverseProxy.port }}/ui/
+      -> Vault UI directly (Vault hardcodes its own UI/API to the
+         absolute /ui/ and /v1/ paths, so it can't be served under a
+         "/vault" prefix like WordPress/Keycloak are)
+
+Note: External Secrets Operator ships no web UI of its own -- inspect
+its ExternalSecret/ClusterSecretStore objects with
+`kubectl get/describe externalsecret,clustersecretstore` instead.
+
 Make sure {{ .Values.reverseProxy.hostname }} resolves to your host
 (e.g. `echo "127.0.0.1 {{ .Values.reverseProxy.hostname }}" | sudo tee -a /etc/hosts`)
 and that the kind cluster was created with `kind-config.yaml` (maps

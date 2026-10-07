@@ -14,6 +14,19 @@ spec:
       input:
         apiVersion: pt.fn.crossplane.io/v1beta1
         kind: Resources
+        {{- /*
+          Keycloak's own http.relativePath is set to this same subpath
+          whenever the demo reverse proxy is enabled (see the Keycloak
+          Release below), so EVERY Keycloak endpoint -- including the
+          ones called server-to-server over the internal Service
+          hostname, like the provider-keycloak admin API and the OIDC
+          plugin's userinfo/token calls -- must include it too, not just
+          the externally-reachable browser-facing URLs. See
+          https://www.keycloak.org/server/reverseproxy for why a
+          reverse-proxied subpath must match http-relative-path exactly
+          and apply uniformly to all callers, internal or not.
+        */}}
+        {{- $kcPath := ternary "/keycloak" "" .Values.reverseProxy.enabled }}
         resources:
 
           # =================================================================
@@ -126,7 +139,7 @@ spec:
                     - fromFieldPath: spec.keycloakAdminPassword
                   strategy: string
                   string:
-                    fmt: '{"url":"http://keycloak-http.default.svc.cluster.local","client_id":"admin-cli","username":"admin","password":"%s"}'
+                    fmt: '{"url":"http://keycloak-http.default.svc.cluster.local{{ $kcPath }}","client_id":"admin-cli","username":"admin","password":"%s"}'
                 toFieldPath: spec.forProvider.manifest.stringData.credentials
 
           # -------------------------------------------------------------
@@ -169,7 +182,7 @@ spec:
                         cpu: 750m
                         memory: 768Mi
                     http:
-                      relativePath: "/"
+                      relativePath: {{ $kcPath | default "/" | quote }}
                     proxy:
                       enabled: false
                     database:
@@ -194,12 +207,12 @@ spec:
                       # Pin every browser-facing URL Keycloak generates
                       # (login form action, redirects, issuer, etc.) to
                       # the reverse-proxy's externally-reachable
-                      # /keycloak path, regardless of the Host header the
-                      # request actually arrived with. This does NOT
-                      # affect server-to-server calls (token/userinfo,
-                      # the provider-keycloak admin API), which keep
-                      # using the internal Service hostname directly --
-                      # only frontend/browser-redirect URLs are pinned.
+                      # /keycloak path. http.relativePath above is ALSO
+                      # set to /keycloak, so every request -- including
+                      # server-to-server calls over the internal Service
+                      # hostname (token/userinfo, the provider-keycloak
+                      # admin API) -- must include that same /keycloak
+                      # prefix; see the $kcPath uses throughout this file.
                       - name: KC_HOSTNAME
                         value: "https://{{ .Values.reverseProxy.hostname }}:{{ .Values.reverseProxy.port }}/keycloak"
                       - name: KC_HOSTNAME_BACKCHANNEL_DYNAMIC
@@ -603,7 +616,7 @@ spec:
                     - fromFieldPath: spec.realmName
                   strategy: string
                   string:
-                    fmt: "http://keycloak-http.default.svc.cluster.local/realms/%s/protocol/openid-connect/userinfo"
+                    fmt: "http://keycloak-http.default.svc.cluster.local{{ $kcPath }}/realms/%s/protocol/openid-connect/userinfo"
                 toFieldPath: spec.forProvider.values.oidc.userinfoUrl
               - type: CombineFromComposite
                 combine:
@@ -611,7 +624,7 @@ spec:
                     - fromFieldPath: spec.realmName
                   strategy: string
                   string:
-                    fmt: "http://keycloak-http.default.svc.cluster.local/realms/%s/protocol/openid-connect/token"
+                    fmt: "http://keycloak-http.default.svc.cluster.local{{ $kcPath }}/realms/%s/protocol/openid-connect/token"
                 toFieldPath: spec.forProvider.values.oidc.tokenUrl
               - type: CombineFromComposite
                 combine:

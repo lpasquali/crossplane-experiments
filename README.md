@@ -74,6 +74,15 @@ printed by `helm install`/`helm upgrade` itself (see
   `https://crossplane-experiment:9443/keycloak/admin/faggeta/console`,
   i.e. the Keycloak `faggeta` realm's admin console, still served
   through the same `/keycloak` proxy path above
+- `https://crossplane-experiment:9443/vault` -> a client-side (302)
+  redirect to Vault's UI at `/ui/` (dev-mode root token is `root`)
+- `https://crossplane-experiment:9443/ui/` and `/v1/` -> Vault's UI
+  and API directly (Vault hardcodes these absolute paths itself, so
+  unlike WordPress/Keycloak it can't be rebased under a `/vault`
+  prefix — see the note in `reverse-proxy-nginx.conf.template`)
+
+External Secrets Operator ships no web UI of its own; inspect its
+objects instead with `kubectl get/describe externalsecret,clustersecretstore`.
 
 To reach it from your host:
 
@@ -86,16 +95,27 @@ To reach it from your host:
 3. Browse to any of the URLs above (accept the self-signed certificate
    warning).
 
-> Note: all browser-facing URLs are pinned to this proxy address, not
-> the internal Service hostnames — WordPress's `WP_HOME`/`WP_SITEURL`,
-> Keycloak's `KC_HOSTNAME`, and the OIDC login/issuer URLs all resolve
-> to `https://crossplane-experiment:9443/...` (see `externalUrl` in
-> `chart/manifests/composition.yaml` and the `keycloakx` chart's
-> `KC_HOSTNAME`/`KC_HOSTNAME_BACKCHANNEL_DYNAMIC` env vars). Only
-> server-to-server calls that never go through a browser (OIDC
-> token/userinfo exchange, the provider-keycloak admin API, DB
-> connections) keep using internal Service DNS, since those never need
-> to be reachable from outside the cluster.
+> Note: the proxy preserves each app's full path prefix (`/wordpress`,
+> `/keycloak`) all the way to the backend instead of stripping it, and
+> both apps are configured to know they're mounted at that prefix —
+> WordPress's Apache has a matching `Alias` (see
+> `charts/wordpress/templates/apache-subpath-configmap.yaml`) and
+> Keycloak's `http.relativePath` is set to `/keycloak` (see
+> `composition.yaml`). This matters because both apps generate their
+> own redirects (e.g. Apache's `mod_dir` adding a trailing slash to
+> `/wordpress/wp-admin`, or Keycloak adding one to
+> `/keycloak/admin/<realm>/console`) using whatever path prefix and
+> Host header *they* were given — if the proxy had stripped the
+> prefix or passed the internal Service hostname, those self-generated
+> redirects would point at an unreachable internal/prefix-less URL.
+> The proxy also passes through the real external `Host` header
+> (`$http_host`, not a hardcoded internal DNS name) and rewrites any
+> plain-`http://` redirect the backends emit back to `https://` via
+> `proxy_redirect` (neither Apache nor Keycloak know TLS is terminated
+> upstream by the proxy, since the proxy-to-backend hop is plain HTTP).
+> Vault's UI is the one exception: it hardcodes its own absolute
+> `/ui/`/`/v1/` paths with no equivalent of a configurable prefix, so
+> it's proxied at those exact paths instead of under `/vault`.
 
 ## Architecture
 
@@ -142,6 +162,7 @@ flowchart TB
 
     PROXY -- "/wordpress" --> WP
     PROXY -- "/keycloak" --> KC
+    PROXY -- "/ui/, /v1/" --> VAULT
 
     User(("Browser")) -- "https://crossplane-experiment:9443" --> PROXY
 ```

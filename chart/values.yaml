@@ -108,7 +108,11 @@ vault:
   injector:
     enabled: false
   ui:
-    enabled: false
+    # Exposed through the reverse proxy at /ui/ and /v1/ (Vault's UI
+    # hardcodes its own asset/API paths to those two roots -- it has
+    # no equivalent of Keycloak's relativePath, so it can't be rebased
+    # under a "/vault" prefix; see reverse-proxy-nginx.conf.template).
+    enabled: true
 
 # =====================================================================
 # External Secrets Operator - syncs secret material FROM Vault back
@@ -184,7 +188,7 @@ charts:
   # nginx static file server, see templates/chart-registry.yaml), built
   # from charts/wordpress/ via scripts/build-charts.sh.
   wordpress:
-    version: 0.1.6
+    version: 0.1.7
 
 # =====================================================================
 # Reverse proxy exposing the demo over a single external URL:

@@ -15,24 +15,25 @@ http {
     ssl_certificate_key /etc/nginx/tls/tls.key;
 
     location = / {
-      return 200 "crossplane-experiments demo\n/wordpress        -> WordPress\n/keycloak         -> Keycloak\n/keycloak-faggeta -> Keycloak \"faggeta\" realm admin console\n";
+      return 200 "crossplane-experiments demo\n/wordpress        -> WordPress\n/keycloak         -> Keycloak\n/keycloak-faggeta -> Keycloak \"faggeta\" realm admin console\n/vault            -> Vault UI (redirects to /ui/)\n/ui/              -> Vault UI\n";
       add_header Content-Type text/plain;
     }
 
     location /wordpress/ {
       set $wordpress_upstream wordpress.default.svc.cluster.local;
-      # IMPORTANT: proxy_pass's automatic "replace the matched location
-      # prefix" behavior only applies when its whole target is a
-      # compile-time-literal URL. Because the host here is a variable
-      # (needed for request-time DNS resolution, see `resolver` above),
-      # nginx disables that automatic rewriting and would otherwise
-      # forward only the literal path written after the host ("/"),
-      # collapsing every request (wp-login.php, static assets, etc.)
-      # to the upstream's "/" -- which is exactly what was happening.
-      # Fix: explicitly strip the "/wordpress" prefix ourselves via
-      # `rewrite ... break`, then use a URI-less proxy_pass so nginx
-      # forwards the already-rewritten $uri (+query string) as-is.
-      rewrite ^/wordpress/(.*)$ /$1 break;
+      # Unlike the old rewrite+break approach, don't strip the
+      # "/wordpress" prefix: the WordPress container's Apache now has a
+      # matching Alias (see charts/wordpress/templates/configmap.yaml)
+      # so it serves itself natively under /wordpress/ instead of "/".
+      # This matters because Apache's own low-level redirects (e.g.
+      # mod_dir adding a trailing slash to directory requests like
+      # /wordpress/wp-admin) are built from the path Apache itself
+      # received -- if nginx had already stripped the prefix, those
+      # redirects would come back without it (e.g. "/wp-admin/"),
+      # which doesn't exist behind this proxy and 404s.
+      # proxy_pass without a URI (just scheme+host, no trailing path)
+      # forwards the original request URI unchanged, including the
+      # "/wordpress" prefix matched by this location.
       proxy_pass http://$wordpress_upstream;
       # Pass through the real external Host header (not the internal
       # Service hostname): WordPress is configured (via WP_HOME /
@@ -44,17 +45,34 @@ http {
       proxy_set_header Host $http_host;
       proxy_set_header X-Forwarded-Proto https;
       proxy_set_header X-Forwarded-For $remote_addr;
+      # Both Apache (serving WordPress) and nginx here only ever speak
+      # plain HTTP to each other -- TLS is terminated at this proxy --
+      # so Apache itself has no idea the real inbound connection was
+      # HTTPS and builds its own absolute redirects (e.g. the mod_dir
+      # trailing-slash one above) with an "http://" scheme. Rewrite
+      # that back to "https://" so the browser doesn't get silently
+      # downgraded to a scheme this proxy doesn't even listen on.
+      proxy_redirect http:// https://;
     }
 
     location /keycloak/ {
       set $keycloak_upstream keycloak-http.default.svc.cluster.local;
-      # See the /wordpress/ location above for why this rewrite+break
-      # is required whenever proxy_pass's host is a variable.
-      rewrite ^/keycloak/(.*)$ /$1 break;
+      # Same reasoning as /wordpress/ above: don't strip the "/keycloak"
+      # prefix. Keycloak's own http.relativePath is set to "/keycloak"
+      # (see composition.yaml) specifically so it knows it's mounted at
+      # this subpath and builds every link/redirect it generates --
+      # including low-level ones like adding a trailing slash to
+      # /keycloak/admin/<realm>/console -- with that prefix included.
+      # Previously stripping the prefix here (and hardcoding the Host
+      # header to the internal Service name) caused Keycloak to issue
+      # redirects straight to its unreachable internal hostname.
       proxy_pass http://$keycloak_upstream;
-      proxy_set_header Host keycloak-http.default.svc.cluster.local;
+      proxy_set_header Host $http_host;
       proxy_set_header X-Forwarded-Proto https;
       proxy_set_header X-Forwarded-For $remote_addr;
+      # See the /wordpress/ location above for why this is needed:
+      # Keycloak only ever sees a plain-HTTP connection from nginx.
+      proxy_redirect http:// https://;
     }
 
     # Convenience shortcut straight to the "faggeta" realm's admin
@@ -66,6 +84,35 @@ http {
     }
     location /keycloak-faggeta/ {
       return 302 /keycloak/admin/faggeta/console;
+    }
+
+    # Vault's UI has no equivalent of Keycloak's relativePath: its
+    # Ember app hardcodes "rootURL: /ui/" and every asset/API URL it
+    # emits is rooted at "/ui/..." or "/v1/..." regardless of where
+    # it's reverse-proxied from, so (unlike /wordpress or /keycloak)
+    # it can't be served under a "/vault" prefix -- it must be proxied
+    # at exactly the absolute paths it already expects.
+    location /ui/ {
+      set $vault_upstream vault.default.svc.cluster.local:8200;
+      proxy_pass http://$vault_upstream;
+      proxy_set_header Host $http_host;
+      proxy_set_header X-Forwarded-Proto https;
+      proxy_set_header X-Forwarded-For $remote_addr;
+      proxy_redirect http:// https://;
+    }
+    location /v1/ {
+      set $vault_upstream vault.default.svc.cluster.local:8200;
+      proxy_pass http://$vault_upstream;
+      proxy_set_header Host $http_host;
+      proxy_set_header X-Forwarded-Proto https;
+      proxy_set_header X-Forwarded-For $remote_addr;
+    }
+
+    # Friendly alias matching the /wordpress, /keycloak naming scheme;
+    # just a client-side redirect to Vault's real (unprefixable) UI
+    # root above.
+    location = /vault {
+      return 302 /ui/;
     }
   }
 }

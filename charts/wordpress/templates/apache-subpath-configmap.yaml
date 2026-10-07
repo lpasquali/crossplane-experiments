@@ -1,0 +1,36 @@
+{{- /*
+  When WordPress is served from a reverse-proxy sub-path (externalUrl
+  has a non-root path component, e.g. "https://host:port/wordpress"),
+  Apache itself needs to know it's mounted under that sub-path too --
+  otherwise its own low-level redirects (mod_dir adding a trailing
+  slash to directory requests like "/wordpress/wp-admin", or any
+  other Apache-generated absolute redirect) are built using just the
+  request path Apache actually received. If the reverse proxy forwards
+  "/wordpress/wp-admin" unchanged (see chart/files/reverse-proxy-*
+  in the umbrella chart) but Apache's docroot is only aliased at "/",
+  Apache thinks it's being accessed at "/wp-admin" and redirects there
+  -- a path the reverse proxy never routes, so it 404s. Adding a
+  matching Alias fixes this: Apache then knows every request arrives
+  prefixed with the sub-path and reproduces it in any redirect it
+  builds, same as WordPress's own code already does via the pinned
+  WP_HOME/WP_SITEURL constants.
+*/}}
+{{- $urlPath := "" }}
+{{- if .Values.externalUrl }}
+{{- $urlPath = (urlParse .Values.externalUrl).path }}
+{{- end }}
+{{- if and $urlPath (ne $urlPath "/") }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "wordpress.fullname" . }}-apache-subpath
+  labels:
+    {{- include "wordpress.labels" . | nindent 4 }}
+data:
+  subpath.conf: |
+    Alias {{ $urlPath }} /var/www/html
+    <Directory /var/www/html>
+        AllowOverride All
+        Require all granted
+    </Directory>
+{{- end }}
