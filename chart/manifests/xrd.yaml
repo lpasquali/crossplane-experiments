@@ -40,6 +40,10 @@ spec:
                   type: string
                   default: "wordpress-oidc-client-secret-CHANGE-ME"
                   description: "Client secret shared between WordPress and its Keycloak OIDC client"
+                demoUserName:
+                  type: string
+                  default: "demo-user"
+                  description: "Username for the demo Keycloak user created in the realm (also admin of that realm and of WordPress)"
                 demoUserPassword:
                   type: string
                   default: "DemoUserPass123!"

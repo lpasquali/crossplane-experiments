@@ -285,6 +285,18 @@ spec:
               - type: FromCompositeFieldPath
                 fromFieldPath: spec.realmName
                 toFieldPath: spec.forProvider.realmId
+              - type: FromCompositeFieldPath
+                fromFieldPath: spec.demoUserName
+                toFieldPath: spec.forProvider.username
+              - type: CombineFromComposite
+                combine:
+                  variables:
+                    - fromFieldPath: spec.demoUserName
+                    - fromFieldPath: spec.realmName
+                  strategy: string
+                  string:
+                    fmt: "%s@%s.local"
+                toFieldPath: spec.forProvider.email
 
           # -------------------------------------------------------------
           # 7b. Import Keycloak's built-in "realm-management" client (auto

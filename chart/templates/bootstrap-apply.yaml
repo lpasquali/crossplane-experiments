@@ -109,6 +109,7 @@ data:
       keycloakAdminPassword: {{ .Values.claim.keycloakAdminPassword | quote }}
       wordpressDbPassword: {{ .Values.claim.wordpressDbPassword | quote }}
       oidcClientSecret: {{ .Values.claim.oidcClientSecret | quote }}
+      demoUserName: {{ .Values.claim.demoUserName | quote }}
       demoUserPassword: {{ .Values.claim.demoUserPassword | quote }}
       wordpressAdminPassword: {{ .Values.claim.wordpressAdminPassword | quote }}
   {{- end }}

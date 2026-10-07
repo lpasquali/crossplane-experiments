@@ -67,9 +67,10 @@ claim:
   name: dev-environment
   namespace: default
   dbPassword: "SuperSecurePass123!"
-  realmName: "setup"
-  keycloakAdminPassword: "KeycloakAdminPass123!"
+  realmName: "faggeta"
+  keycloakAdminPassword: "amanita"
   wordpressDbPassword: "WordPressDbPass123!"
   oidcClientSecret: "wordpress-oidc-client-secret-CHANGE-ME"
-  demoUserPassword: "DemoUserPass123!"
+  demoUserName: "boletus"
+  demoUserPassword: "cappella"
   wordpressAdminPassword: "WordPressAdminPass123!"
