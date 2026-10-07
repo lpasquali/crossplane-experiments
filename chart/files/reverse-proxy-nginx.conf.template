@@ -93,7 +93,7 @@ http {
     # it can't be served under a "/vault" prefix -- it must be proxied
     # at exactly the absolute paths it already expects.
     location /ui/ {
-      set $vault_upstream vault.default.svc.cluster.local:8200;
+      set $vault_upstream vault.{{ .Release.Namespace }}.svc.cluster.local:8200;
       proxy_pass http://$vault_upstream;
       proxy_set_header Host $http_host;
       proxy_set_header X-Forwarded-Proto https;
@@ -101,7 +101,7 @@ http {
       proxy_redirect http:// https://;
     }
     location /v1/ {
-      set $vault_upstream vault.default.svc.cluster.local:8200;
+      set $vault_upstream vault.{{ .Release.Namespace }}.svc.cluster.local:8200;
       proxy_pass http://$vault_upstream;
       proxy_set_header Host $http_host;
       proxy_set_header X-Forwarded-Proto https;

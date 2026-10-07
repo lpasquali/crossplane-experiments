@@ -6,6 +6,9 @@
 #   /keycloak         -> the Keycloak Service (default/keycloak-http)
 #   /keycloak-faggeta -> client-side redirect to the Keycloak "faggeta"
 #                        realm's admin console (/keycloak/admin/faggeta/console)
+#   /vault, /ui/, /v1/ -> the Vault Service (same namespace as this
+#                        release); see reverse-proxy-nginx.conf.template
+#                        for why Vault can't be rebased under /vault
 #
 # This is plain nginx (official image, non-Bitnami) terminating TLS with
 # a self-signed cert generated at install time via Helm's
@@ -14,12 +17,11 @@
 # (host port {{ .Values.reverseProxy.port }} -> node port
 # {{ .Values.reverseProxy.nodePort }}).
 #
-# Note: WordPress and Keycloak were both configured with their own
-# internal Service hostnames as their site/base URL, so some
-# absolutely-linked assets/redirects may still point at the internal
-# name rather than this proxy's external URL. This proxy is primarily
-# meant to let you confirm both apps are up and reachable end-to-end
-# (HTTP status, login page rendering) through one external address.
+# Note: WordPress's Apache and Keycloak are both configured to know
+# they're mounted under their proxy path (an Apache Alias, and
+# http.relativePath respectively) and the proxy preserves that prefix
+# end-to-end instead of stripping it -- see the per-location comments
+# in reverse-proxy-nginx.conf.template for the full rationale.
 # =====================================================================
 {{- if .Values.reverseProxy.enabled }}
 {{- $cn := .Values.reverseProxy.hostname }}
