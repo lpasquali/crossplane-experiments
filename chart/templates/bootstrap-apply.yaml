@@ -1,14 +1,25 @@
 # =====================================================================
-# ProviderConfigs (for provider-helm, provider-kubernetes, provider-keycloak)
-# and the demo AppEnvironment claim reference CRDs that are NOT available
-# immediately at `helm install` time: they come from Crossplane Provider
-# packages (pulled/installed asynchronously by Crossplane's own controller,
-# which itself is only just starting as part of this same release) and from
-# our XAppEnvironment XRD (established asynchronously once Crossplane's core
-# is reconciling). Helm validates every templated manifest against the API
-# server's known types at apply time, so these can't be plain templates in
-# a one-shot install - a post-install hook Job waits for those CRDs to show
-# up, then applies them with kubectl.
+# Several resources in this chart reference CRDs that are NOT available
+# immediately at `helm install` time on a genuinely fresh cluster:
+#   - Function/Provider (pkg.crossplane.io): Crossplane's own core CRDs
+#     are installed by the crossplane pod itself once it starts running
+#     (they are NOT shipped as static CRDs in the crossplane chart), so
+#     they don't exist yet at the instant Helm validates this release's
+#     manifests.
+#   - CompositeResourceDefinition/Composition (apiextensions.crossplane.io):
+#     same story, same core CRDs.
+#   - ProviderConfigs: come from the Provider *packages* above, pulled
+#     and installed asynchronously by Crossplane's package manager.
+#   - The demo AppEnvironment claim: comes from our own XRD, established
+#     asynchronously once Crossplane reconciles it.
+# Helm validates every templated manifest against the API server's known
+# types at apply time, so none of the above can be plain templates in a
+# one-shot install - a post-install hook Job waits for each CRD to show
+# up (in dependency order), then applies the corresponding manifest with
+# kubectl. The manifests themselves live under chart/manifests/ (NOT
+# chart/templates/) specifically so Helm does not try to render+apply
+# them directly; they're only ever rendered via `tpl` into this
+# ConfigMap and applied by the hook Job below.
 # =====================================================================
 apiVersion: v1
 kind: ServiceAccount
@@ -45,6 +56,12 @@ metadata:
     "helm.sh/hook-weight": "-5"
     "helm.sh/hook-delete-policy": before-hook-creation
 data:
+  providers-and-functions.yaml: |
+{{ tpl (.Files.Get "manifests/providers-and-functions.yaml") . | indent 4 }}
+  xrd.yaml: |
+{{ tpl (.Files.Get "manifests/xrd.yaml") . | indent 4 }}
+  composition.yaml: |
+{{ tpl (.Files.Get "manifests/composition.yaml") . | indent 4 }}
   provider-configs.yaml: |
     ---
     # In-cluster ProviderConfig for Provider Helm
@@ -107,7 +124,7 @@ metadata:
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 spec:
   backoffLimit: 20
-  activeDeadlineSeconds: 900
+  activeDeadlineSeconds: 1200
   template:
     spec:
       serviceAccountName: bootstrap-apply
@@ -121,6 +138,22 @@ spec:
             - -c
             - |
               set -e
+              echo "Waiting for Crossplane core CRDs (functions, providers)..."
+              for crd in functions.pkg.crossplane.io \
+                         providers.pkg.crossplane.io; do
+                until kubectl get crd "$crd" >/dev/null 2>&1; do sleep 5; done
+              done
+              kubectl apply -f /manifests/providers-and-functions.yaml
+
+              echo "Waiting for Crossplane core CRDs (XRD/Composition)..."
+              for crd in compositeresourcedefinitions.apiextensions.crossplane.io \
+                         compositions.apiextensions.crossplane.io; do
+                until kubectl get crd "$crd" >/dev/null 2>&1; do sleep 5; done
+              done
+              kubectl apply -f /manifests/xrd.yaml
+              kubectl apply -f /manifests/composition.yaml
+
+              echo "Waiting for provider-helm/kubernetes/keycloak CRDs (ProviderConfig)..."
               for crd in providerconfigs.helm.crossplane.io \
                          providerconfigs.kubernetes.crossplane.io \
                          providerconfigs.keycloak.crossplane.io; do
