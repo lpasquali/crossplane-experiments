@@ -26,3 +26,10 @@ metadata:
   name: provider-keycloak
 spec:
   package: {{ .Values.providers.providerKeycloak }}
+---
+apiVersion: pkg.crossplane.io/v1
+kind: Provider
+metadata:
+  name: provider-vault
+spec:
+  package: {{ .Values.providers.providerVault }}

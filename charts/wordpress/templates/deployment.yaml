@@ -21,6 +21,8 @@ spec:
       initContainers:
         - name: install-oidc-plugin
           image: {{ .Values.pluginFetcherImage }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
           command:
             - sh
             - -c

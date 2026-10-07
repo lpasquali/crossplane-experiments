@@ -3,14 +3,147 @@
 # =====================================================================
 crossplane:
   enabled: true
+  # Chart defaults are fairly generous (500m/1Gi core, 100m/512Mi RBAC
+  # manager) for a demo on a resource-constrained VM; trim them down.
+  resourcesCrossplane:
+    limits:
+      cpu: 250m
+      memory: 512Mi
+    requests:
+      cpu: 50m
+      memory: 128Mi
+  resourcesRBACManager:
+    limits:
+      cpu: 100m
+      memory: 256Mi
+    requests:
+      cpu: 20m
+      memory: 64Mi
 
 cloudnative-pg:
   enabled: true
+  # Operator defaults to no resource requests/limits; without a cap, its
+  # controller process is free to burst and compete with the actual
+  # workload pods (keycloak, wordpress, etc) for CPU on a small VM.
+  resources:
+    requests:
+      cpu: 20m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
 
 mariadb-operator:
   enabled: true
   crds:
     enabled: true
+  # Same rationale as cloudnative-pg above: cap the operator's own
+  # controller/webhook/cert-controller pods, which otherwise run with no
+  # resource requests/limits at all.
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      cpu: 150m
+      memory: 128Mi
+  webhook:
+    resources:
+      requests:
+        cpu: 10m
+        memory: 32Mi
+      limits:
+        cpu: 50m
+        memory: 64Mi
+  certController:
+    resources:
+      requests:
+        cpu: 10m
+        memory: 32Mi
+      limits:
+        cpu: 50m
+        memory: 64Mi
+
+# =====================================================================
+# HashiCorp Vault - single source of truth for every secret this demo
+# generates (passwords, OIDC client secret, etc). Dev-mode only: a
+# single in-memory, auto-unsealed instance with a fixed root token --
+# NOT production-safe, but fine for a throwaway kind cluster.
+# =====================================================================
+vault:
+  enabled: true
+  # Pins the chart's generated resource names (Service, StatefulSet, etc)
+  # to a fixed "vault" prefix regardless of the umbrella release name, so
+  # the hardcoded "vault.<namespace>.svc.cluster.local" hostnames used by
+  # the Crossplane ProviderConfig and ExternalSecrets ClusterSecretStore
+  # (see bootstrap-apply.yaml) always resolve correctly.
+  fullnameOverride: vault
+  server:
+    # No resource requests/limits by default; Vault dev-mode is tiny but
+    # otherwise has no ceiling on CPU/memory at all.
+    resources:
+      requests:
+        cpu: 20m
+        memory: 64Mi
+      limits:
+        cpu: 200m
+        memory: 256Mi
+    dev:
+      enabled: true
+      devRootToken: "root"
+    standalone:
+      enabled: false
+    ha:
+      enabled: false
+    # Default exec probe ("vault status -tls-skip-verify") can time out
+    # on slower/CI-like nodes within its default 3s budget even once
+    # Vault is actually up; switch to a plain httpGet probe (cheaper,
+    # no subprocess) and give it more headroom.
+    readinessProbe:
+      enabled: true
+      path: "/v1/sys/health?standbyok=true"
+      timeoutSeconds: 10
+      periodSeconds: 5
+      failureThreshold: 6
+  injector:
+    enabled: false
+  ui:
+    enabled: false
+
+# =====================================================================
+# External Secrets Operator - syncs secret material FROM Vault back
+# into native Kubernetes Secrets, so every existing consumer (Helm
+# chart values, provider-kubernetes Objects) keeps reading a plain
+# Secret unchanged.
+# =====================================================================
+external-secrets:
+  enabled: true
+  installCRDs: true
+  # Controller/webhook/cert-controller all default to no resource
+  # requests/limits; cap them for a resource-constrained VM.
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      cpu: 100m
+      memory: 128Mi
+  webhook:
+    resources:
+      requests:
+        cpu: 10m
+        memory: 32Mi
+      limits:
+        cpu: 50m
+        memory: 64Mi
+  certController:
+    resources:
+      requests:
+        cpu: 10m
+        memory: 32Mi
+      limits:
+        cpu: 50m
+        memory: 64Mi
 
 # =====================================================================
 # In-cluster Helm chart repository (classic HTTP, nginx) hosting our
@@ -28,6 +161,17 @@ providers:
   providerHelm: xpkg.upbound.io/crossplane-contrib/provider-helm:v1.4.0
   providerKubernetes: xpkg.upbound.io/crossplane-contrib/provider-kubernetes:v0.12.0
   providerKeycloak: xpkg.upbound.io/crossplane-contrib/provider-keycloak:v2.1.0
+  providerVault: xpkg.upbound.io/upbound/provider-vault:v4.0.4
+
+# =====================================================================
+# HashiCorp Vault mount used by the Composition's SecretV2 +
+# ExternalSecret resources (see composition.yaml). The address is
+# always http://vault.<Release.Namespace>.svc.cluster.local:8200 since
+# Vault is installed as a dependency into this same release/namespace.
+# "secret" is Vault dev-mode's auto-enabled KV-v2 engine.
+# =====================================================================
+vaultSecrets:
+  mount: secret
 
 # =====================================================================
 # Chart versions used inside the Composition (non-Bitnami)

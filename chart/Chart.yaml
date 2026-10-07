@@ -24,3 +24,20 @@ dependencies:
     version: 26.10.1
     repository: oci://ghcr.io/mariadb-operator/charts
     condition: mariadb-operator.enabled
+  # HashiCorp Vault (official chart), dev-mode single instance used as the
+  # source of truth for every secret in this demo (see provider-vault /
+  # External Secrets Operator below). NOT production-safe as configured
+  # (in-memory storage, auto-unsealed, fixed root token) -- fine for a
+  # throwaway kind cluster.
+  - name: vault
+    version: 0.34.1
+    repository: https://helm.releases.hashicorp.com
+    condition: vault.enabled
+  # External Secrets Operator (official, CNCF project, non-Bitnami): syncs
+  # secret material FROM Vault back into native Kubernetes Secrets, so
+  # every existing consumer (Helm chart values, provider-kubernetes
+  # Objects) keeps reading a plain Secret and needs no changes.
+  - name: external-secrets
+    version: 2.12.0
+    repository: https://charts.external-secrets.io
+    condition: external-secrets.enabled

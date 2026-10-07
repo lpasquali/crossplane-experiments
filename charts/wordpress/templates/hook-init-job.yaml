@@ -24,6 +24,8 @@ spec:
           # "wordpress" image does, so this only has to wait for the main
           # Deployment's first boot to finish laying down core files.
           image: wordpress:cli
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
           command:
             - sh
             - -c

@@ -96,6 +96,57 @@ data:
           namespace: {{ .Release.Namespace }}
           name: keycloak-admin-creds
           key: credentials
+    ---
+    # Dev-mode Vault's fixed root token, wrapped two ways: "credentials"
+    # (JSON, consumed by provider-vault's ProviderConfig) and "token"
+    # (raw value, consumed by External Secrets Operator's SecretStore).
+    # NOT how you'd authenticate to a real Vault -- fine for this
+    # throwaway kind demo (see chart/values.yaml vault.server.dev).
+    apiVersion: v1
+    kind: Secret
+    metadata:
+      name: vault-provider-creds
+      namespace: {{ .Release.Namespace }}
+    type: Opaque
+    stringData:
+      credentials: |
+        {"token_name": "crossplane-demo", "token": "{{ .Values.vault.server.dev.devRootToken }}"}
+      token: {{ .Values.vault.server.dev.devRootToken | quote }}
+    ---
+    # ProviderConfig for Provider Vault.
+    apiVersion: vault.upbound.io/v1beta1
+    kind: ProviderConfig
+    metadata:
+      name: default
+    spec:
+      address: "http://vault.{{ .Release.Namespace }}.svc.cluster.local:8200"
+      credentials:
+        source: Secret
+        secretRef:
+          namespace: {{ .Release.Namespace }}
+          name: vault-provider-creds
+          key: credentials
+    ---
+    # ClusterSecretStore for External Secrets Operator: reads secrets
+    # back out of the same in-cluster Vault that the Composition's
+    # SecretV2 resources write into, materializing them as native
+    # Kubernetes Secrets for every existing consumer (Helm chart
+    # values, provider-kubernetes Objects) to keep reading unchanged.
+    apiVersion: external-secrets.io/v1
+    kind: ClusterSecretStore
+    metadata:
+      name: vault-backend
+    spec:
+      provider:
+        vault:
+          server: "http://vault.{{ .Release.Namespace }}.svc.cluster.local:8200"
+          path: {{ .Values.vaultSecrets.mount | quote }}
+          version: "v2"
+          auth:
+            tokenSecretRef:
+              name: vault-provider-creds
+              namespace: {{ .Release.Namespace }}
+              key: token
   {{- if .Values.claim.enabled }}
   claim.yaml: |
     apiVersion: apps.example.org/v1alpha1
@@ -156,7 +207,9 @@ spec:
               echo "Waiting for provider-helm/kubernetes/keycloak CRDs (ProviderConfig)..."
               for crd in providerconfigs.helm.crossplane.io \
                          providerconfigs.kubernetes.crossplane.io \
-                         providerconfigs.keycloak.crossplane.io; do
+                         providerconfigs.keycloak.crossplane.io \
+                         providerconfigs.vault.upbound.io \
+                         clustersecretstores.external-secrets.io; do
                 echo "Waiting for CRD $crd to be established..."
                 until kubectl get crd "$crd" >/dev/null 2>&1; do sleep 5; done
               done

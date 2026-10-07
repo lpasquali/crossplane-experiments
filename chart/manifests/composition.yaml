@@ -22,30 +22,20 @@ spec:
           # =================================================================
 
           # -------------------------------------------------------------
-          # 1. Keycloak's PostgreSQL app-user credentials
+          # 1. Keycloak's PostgreSQL app-user credentials. Sourced from
+          #    Vault (single source of truth) via a SecretV2 write +
+          #    ExternalSecret read-back; see _helpers.tpl.
           # -------------------------------------------------------------
-          - name: keycloak-db-secret
-            base:
-              apiVersion: kubernetes.crossplane.io/v1alpha1
-              kind: Object
-              spec:
-                providerConfigRef:
-                  name: default
-                forProvider:
-                  manifest:
-                    apiVersion: v1
-                    kind: Secret
-                    metadata:
-                      name: keycloak-db-credentials
-                      namespace: default
-                    type: Opaque
-                    stringData:
-                      username: keycloak
-                      password: ""
-            patches:
-              - type: FromCompositeFieldPath
-                fromFieldPath: spec.dbPassword
-                toFieldPath: spec.forProvider.manifest.stringData.password
+{{ include "crossplane-experiments.vaultBackedSecret" (dict
+            "id" "keycloak-db"
+            "secretName" "keycloak-db-credentials"
+            "secretNamespace" "default"
+            "vaultPath" "keycloak/db-credentials"
+            "jsonFmt" "{\"username\":\"keycloak\",\"password\":\"%s\"}"
+            "fields" (list "spec.dbPassword")
+            "Release" .Release
+            "Values" .Values
+          ) | nindent 10 }}
 
           # -------------------------------------------------------------
           # 2. CloudNativePG Postgres Cluster dedicated to Keycloak
@@ -68,6 +58,15 @@ spec:
                       instances: 1
                       storage:
                         size: 2Gi
+                      # CNPG defaults to no resource requests/limits;
+                      # cap the postgres container for a small VM.
+                      resources:
+                        requests:
+                          cpu: 50m
+                          memory: 128Mi
+                        limits:
+                          cpu: 300m
+                          memory: 256Mi
                       bootstrap:
                         initdb:
                           database: keycloak
@@ -81,29 +80,19 @@ spec:
           # =================================================================
 
           # -------------------------------------------------------------
-          # 3. Keycloak admin console password
+          # 3. Keycloak admin console password. Sourced from Vault; see
+          #    _helpers.tpl.
           # -------------------------------------------------------------
-          - name: keycloak-admin-secret
-            base:
-              apiVersion: kubernetes.crossplane.io/v1alpha1
-              kind: Object
-              spec:
-                providerConfigRef:
-                  name: default
-                forProvider:
-                  manifest:
-                    apiVersion: v1
-                    kind: Secret
-                    metadata:
-                      name: keycloak-admin-secret
-                      namespace: default
-                    type: Opaque
-                    stringData:
-                      admin-password: ""
-            patches:
-              - type: FromCompositeFieldPath
-                fromFieldPath: spec.keycloakAdminPassword
-                toFieldPath: spec.forProvider.manifest.stringData.admin-password
+{{ include "crossplane-experiments.vaultBackedSecret" (dict
+            "id" "keycloak-admin"
+            "secretName" "keycloak-admin-secret"
+            "secretNamespace" "default"
+            "vaultPath" "keycloak/admin-secret"
+            "jsonFmt" "{\"admin-password\":\"%s\"}"
+            "fields" (list "spec.keycloakAdminPassword")
+            "Release" .Release
+            "Values" .Values
+          ) | nindent 10 }}
 
           # -------------------------------------------------------------
           # 4. provider-keycloak admin credentials secret. This is what the
@@ -166,6 +155,19 @@ spec:
                     image:
                       repository: quay.io/keycloak/keycloak
                       tag: "26.7.4"
+                    # Chart default is no resource requests/limits, so the
+                    # JVM (-XX:MaxRAMPercentage=70, baked into the image's
+                    # entrypoint) sizes its heap off the *node's* total
+                    # memory instead of a sane container budget. Setting
+                    # an explicit memory limit here is what actually
+                    # bounds the JVM's heap/CPU footprint on a small VM.
+                    resources:
+                      requests:
+                        cpu: 150m
+                        memory: 384Mi
+                      limits:
+                        cpu: 750m
+                        memory: 768Mi
                     http:
                       relativePath: "/"
                     proxy:
@@ -234,29 +236,19 @@ spec:
                 toFieldPath: spec.forProvider.displayName
 
           # -------------------------------------------------------------
-          # 7. Demo Keycloak user, created inside the "setup" realm only
+          # 7. Demo Keycloak user, created inside the "setup" realm only.
+          #    Password sourced from Vault; see _helpers.tpl.
           # -------------------------------------------------------------
-          - name: keycloak-demo-user-secret
-            base:
-              apiVersion: kubernetes.crossplane.io/v1alpha1
-              kind: Object
-              spec:
-                providerConfigRef:
-                  name: default
-                forProvider:
-                  manifest:
-                    apiVersion: v1
-                    kind: Secret
-                    metadata:
-                      name: keycloak-demo-user-password
-                      namespace: default
-                    type: Opaque
-                    stringData:
-                      password: ""
-            patches:
-              - type: FromCompositeFieldPath
-                fromFieldPath: spec.demoUserPassword
-                toFieldPath: spec.forProvider.manifest.stringData.password
+{{ include "crossplane-experiments.vaultBackedSecret" (dict
+            "id" "keycloak-demo-user-pw"
+            "secretName" "keycloak-demo-user-password"
+            "secretNamespace" "default"
+            "vaultPath" "keycloak/demo-user-password"
+            "jsonFmt" "{\"password\":\"%s\"}"
+            "fields" (list "spec.demoUserPassword")
+            "Release" .Release
+            "Values" .Values
+          ) | nindent 10 }}
 
           - name: keycloak-demo-user
             base:
@@ -389,29 +381,20 @@ spec:
                 toFieldPath: spec.forProvider.realmId
 
           # -------------------------------------------------------------
-          # 8. WordPress OIDC Client secret (consumed via clientSecretSecretRef)
+          # 8. WordPress OIDC Client secret (consumed via
+          #    clientSecretSecretRef). Sourced from Vault; see
+          #    _helpers.tpl.
           # -------------------------------------------------------------
-          - name: wordpress-oidc-client-secret
-            base:
-              apiVersion: kubernetes.crossplane.io/v1alpha1
-              kind: Object
-              spec:
-                providerConfigRef:
-                  name: default
-                forProvider:
-                  manifest:
-                    apiVersion: v1
-                    kind: Secret
-                    metadata:
-                      name: wordpress-oidc-client-secret
-                      namespace: default
-                    type: Opaque
-                    stringData:
-                      client-secret: ""
-            patches:
-              - type: FromCompositeFieldPath
-                fromFieldPath: spec.oidcClientSecret
-                toFieldPath: spec.forProvider.manifest.stringData.client-secret
+{{ include "crossplane-experiments.vaultBackedSecret" (dict
+            "id" "wordpress-oidc-client"
+            "secretName" "wordpress-oidc-client-secret"
+            "secretNamespace" "default"
+            "vaultPath" "wordpress/oidc-client-secret"
+            "jsonFmt" "{\"client-secret\":\"%s\"}"
+            "fields" (list "spec.oidcClientSecret")
+            "Release" .Release
+            "Values" .Values
+          ) | nindent 10 }}
 
           # -------------------------------------------------------------
           # 9. WordPress OIDC Client, scoped to the "setup" realm only
@@ -460,33 +443,19 @@ spec:
           # =================================================================
 
           # -------------------------------------------------------------
-          # 10. MariaDB credentials for WordPress
+          # 10. MariaDB credentials for WordPress. Sourced from Vault;
+          #     see _helpers.tpl.
           # -------------------------------------------------------------
-          - name: wordpress-mariadb-secret
-            base:
-              apiVersion: kubernetes.crossplane.io/v1alpha1
-              kind: Object
-              spec:
-                providerConfigRef:
-                  name: default
-                forProvider:
-                  manifest:
-                    apiVersion: v1
-                    kind: Secret
-                    metadata:
-                      name: wordpress-mariadb-credentials
-                      namespace: default
-                    type: Opaque
-                    stringData:
-                      root-password: ""
-                      password: ""
-            patches:
-              - type: FromCompositeFieldPath
-                fromFieldPath: spec.wordpressDbPassword
-                toFieldPath: spec.forProvider.manifest.stringData.root-password
-              - type: FromCompositeFieldPath
-                fromFieldPath: spec.wordpressDbPassword
-                toFieldPath: spec.forProvider.manifest.stringData.password
+{{ include "crossplane-experiments.vaultBackedSecret" (dict
+            "id" "wordpress-mariadb"
+            "secretName" "wordpress-mariadb-credentials"
+            "secretNamespace" "default"
+            "vaultPath" "wordpress/mariadb-credentials"
+            "jsonFmt" "{\"root-password\":\"%s\",\"password\":\"%s\"}"
+            "fields" (list "spec.wordpressDbPassword" "spec.wordpressDbPassword")
+            "Release" .Release
+            "Values" .Values
+          ) | nindent 10 }}
 
           # -------------------------------------------------------------
           # 11. MariaDB database for WordPress, managed by mariadb-operator
@@ -521,32 +490,32 @@ spec:
                         key: password
                       storage:
                         size: 2Gi
+                      # mariadb-operator defaults to no resource
+                      # requests/limits; cap the mariadb container for a
+                      # small VM.
+                      resources:
+                        requests:
+                          cpu: 50m
+                          memory: 128Mi
+                        limits:
+                          cpu: 300m
+                          memory: 256Mi
 
           # -------------------------------------------------------------
           # 12. WordPress admin account password (used by the wp-cli
-          #     post-install hook Job inside our own WordPress chart)
+          #     post-install hook Job inside our own WordPress chart).
+          #     Sourced from Vault; see _helpers.tpl.
           # -------------------------------------------------------------
-          - name: wordpress-admin-secret
-            base:
-              apiVersion: kubernetes.crossplane.io/v1alpha1
-              kind: Object
-              spec:
-                providerConfigRef:
-                  name: default
-                forProvider:
-                  manifest:
-                    apiVersion: v1
-                    kind: Secret
-                    metadata:
-                      name: wordpress-admin-secret
-                      namespace: default
-                    type: Opaque
-                    stringData:
-                      password: ""
-            patches:
-              - type: FromCompositeFieldPath
-                fromFieldPath: spec.wordpressAdminPassword
-                toFieldPath: spec.forProvider.manifest.stringData.password
+{{ include "crossplane-experiments.vaultBackedSecret" (dict
+            "id" "wordpress-admin"
+            "secretName" "wordpress-admin-secret"
+            "secretNamespace" "default"
+            "vaultPath" "wordpress/admin-secret"
+            "jsonFmt" "{\"password\":\"%s\"}"
+            "fields" (list "spec.wordpressAdminPassword")
+            "Release" .Release
+            "Values" .Values
+          ) | nindent 10 }}
 
           # -------------------------------------------------------------
           # 13. WordPress (Helm Release), using our self-authored chart
@@ -569,6 +538,16 @@ spec:
                   namespace: default
                   values:
                     fullnameOverride: wordpress
+                    # Our chart's `resources` default is `{}` (uncapped);
+                    # set an explicit small budget for a resource-
+                    # constrained VM.
+                    resources:
+                      requests:
+                        cpu: 50m
+                        memory: 128Mi
+                      limits:
+                        cpu: 300m
+                        memory: 256Mi
                     {{- if .Values.reverseProxy.enabled }}
                     # Pins WP_HOME/WP_SITEURL to the reverse-proxy's
                     # externally-reachable /wordpress path, so every
