@@ -149,7 +149,7 @@ data:
               key: token
   {{- if .Values.claim.enabled }}
   claim.yaml: |
-    apiVersion: apps.example.org/v1alpha1
+    apiVersion: platform.spindox.it/v1alpha1
     kind: AppEnvironment
     metadata:
       name: {{ .Values.claim.name }}
@@ -278,8 +278,8 @@ spec:
               done
               kubectl apply -f /manifests/provider-configs.yaml
               {{- if .Values.claim.enabled }}
-              echo "Waiting for CRD appenvironments.apps.example.org to be established..."
-              until kubectl get crd appenvironments.apps.example.org >/dev/null 2>&1; do sleep 5; done
+              echo "Waiting for CRD appenvironments.platform.spindox.it to be established..."
+              until kubectl get crd appenvironments.platform.spindox.it >/dev/null 2>&1; do sleep 5; done
               kubectl apply -f /manifests/claim.yaml
               {{- end }}
           volumeMounts:

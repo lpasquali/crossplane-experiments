@@ -1,10 +1,10 @@
 apiVersion: apiextensions.crossplane.io/v1
 kind: Composition
 metadata:
-  name: xappenvironments.apps.example.org
+  name: xappenvironments.platform.spindox.it
 spec:
   compositeTypeRef:
-    apiVersion: apps.example.org/v1alpha1
+    apiVersion: platform.spindox.it/v1alpha1
     kind: XAppEnvironment
   mode: Pipeline
   pipeline:
@@ -44,6 +44,7 @@ spec:
             "secretName" "keycloak-db-credentials"
             "secretNamespace" "default"
             "vaultPath" "keycloak/db-credentials"
+            "extraLabels" (dict "cnpg.io/reload" "true")
           ) | nindent 10 }}
 
           # -------------------------------------------------------------
@@ -82,6 +83,42 @@ spec:
                           owner: keycloak
                           secret:
                             name: keycloak-db-credentials
+
+          # -------------------------------------------------------------
+          # 2b. Continuously reconciled Postgres role for the same
+          #     "keycloak" user `bootstrap.initdb` above creates once.
+          #     Unlike bootstrap.initdb (which only runs at cluster
+          #     creation), CNPG's DatabaseRole watches passwordSecret and
+          #     runs ALTER ROLE whenever keycloak-db-credentials changes
+          #     -- e.g. after editing keycloak/db-credentials in Vault --
+          #     so the real Postgres password actually stays in sync
+          #     with Vault, not just the Kubernetes Secret. The
+          #     "cnpg.io/reload: true" label on that Secret (set via
+          #     vaultBackedSecret's extraLabels above) is required for
+          #     CNPG to react immediately -- without it, the operator
+          #     only notices the change on its next unrelated reconcile.
+          # -------------------------------------------------------------
+          - name: keycloak-postgres-role
+            base:
+              apiVersion: kubernetes.crossplane.io/v1alpha1
+              kind: Object
+              spec:
+                providerConfigRef:
+                  name: default
+                forProvider:
+                  manifest:
+                    apiVersion: postgresql.cnpg.io/v1
+                    kind: DatabaseRole
+                    metadata:
+                      name: keycloak-postgres-role
+                      namespace: default
+                    spec:
+                      cluster:
+                        name: keycloak-postgres
+                      name: keycloak
+                      login: true
+                      passwordSecret:
+                        name: keycloak-db-credentials
 
           # =================================================================
           # KEYCLOAK: Helm release (codecentric/keycloakx chart - official
@@ -463,6 +500,7 @@ spec:
             "secretName" "wordpress-mariadb-credentials"
             "secretNamespace" "default"
             "vaultPath" "wordpress/mariadb-credentials"
+            "extraLabels" (dict "k8s.mariadb.com/watch" "true")
           ) | nindent 10 }}
 
           # -------------------------------------------------------------

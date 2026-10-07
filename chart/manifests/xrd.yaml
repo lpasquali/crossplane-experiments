@@ -1,9 +1,9 @@
 apiVersion: apiextensions.crossplane.io/v1
 kind: CompositeResourceDefinition
 metadata:
-  name: xappenvironments.apps.example.org
+  name: xappenvironments.platform.spindox.it
 spec:
-  group: apps.example.org
+  group: platform.spindox.it
   names:
     kind: XAppEnvironment
     plural: xappenvironments

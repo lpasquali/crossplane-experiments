@@ -23,6 +23,10 @@ Call with a dict:
   secretName      final Kubernetes Secret name consumers expect
   secretNamespace namespace of the final Secret
   vaultPath       path under the KV-v2 mount, e.g. "wordpress/admin"
+  extraLabels     (optional) dict of extra labels for the final Secret,
+                  e.g. the "k8s.mariadb.com/watch" label mariadb-
+                  operator's User/MariaDB CRDs need to pick up live
+                  password rotations instead of only reading it once
 */}}
 {{- define "crossplane-experiments.vaultBackedSecret" -}}
 - name: {{ .id }}-vault-sync
@@ -40,6 +44,12 @@ Call with a dict:
       target:
         name: {{ .secretName }}
         creationPolicy: Owner
+{{- if .extraLabels }}
+        template:
+          metadata:
+            labels:
+{{ toYaml .extraLabels | indent 14 }}
+{{- end }}
       dataFrom:
         - extract:
             key: {{ .vaultPath }}

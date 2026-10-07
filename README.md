@@ -72,6 +72,20 @@ exposing everything under one address. All of these URLs are also
 printed by `helm install`/`helm upgrade` itself (see
 `chart/templates/NOTES.txt`), so you don't need to hunt for them here:
 
+```mermaid
+flowchart LR
+    Browser(("🌐 Your browser"))
+    Browser == "https://crossplane-experiment:9443" ==> Proxy["Reverse proxy\n(nginx, self-signed TLS)"]
+
+    Proxy -- "/wordpress" --> WP["WordPress\nOIDC login via Keycloak's 'setup' realm"]
+    Proxy -- "/keycloak" --> KC["Keycloak\nmaster realm admin console"]
+    Proxy -. "/keycloak-&lt;realm&gt;\n(302 redirect)" .-> KC
+    Proxy -. "/vault\n(302 redirect)" .-> UI
+    Proxy -- "/ui/, /v1/" --> UI["Vault UI + API\n(dev-mode root token: see helm output)"]
+
+    WP -. "OIDC login" .-> KC
+```
+
 - `https://crossplane-experiment:9443/wordpress` -> WordPress
   (OIDC login via Keycloak's `setup` realm)
 - `https://crossplane-experiment:9443/keycloak` -> Keycloak
@@ -210,9 +224,9 @@ Every secret in the table above (`keycloak/db-credentials`,
 `wordpress/admin-secret`) is reachable and editable through the Vault
 UI (`/vault` or `/ui/`, see "Single external URL" above). Vault really
 is this demo's only source of truth for these values now — there's no
-Crossplane push loop to revert your edit — **but an in-place Vault
-edit still isn't enough to rotate a live credential**, for cybersecurity
-awareness, here's exactly why, tracing the actual data flow:
+Crossplane push loop to revert your edit. **What happens next if you
+edit one, however, differs by secret**, for cybersecurity awareness
+here's exactly why, tracing the actual data flow:
 
 ```
 bootstrap-apply Job (one-time, only if path has no data yet)
@@ -220,35 +234,69 @@ bootstrap-apply Job (one-time, only if path has no data yet)
 Vault KV path (e.g. keycloak/db-credentials)   <-- you'd edit here
    --(ExternalSecret, refreshInterval: 1m, pull-only)-->
 Kubernetes Secret actually consumed by the app (e.g. keycloak-db-credentials)
-   --(read once, at pod start / DB bootstrap only)-->
-the running Postgres role password / app's in-memory config
+   --(see below: either auto-rotated, or read once at pod start)-->
+the running Postgres role password / MariaDB user password / app's in-memory config
 ```
 
-If you edit the value **in Vault**, the following happens:
+Within about a minute of any Vault edit, the `ExternalSecret` pulls
+your edited value and overwrites the consumer Kubernetes `Secret` with
+it, and it **stays there** (nothing pushes the old value back anymore).
+What happens after that depends on which secret you changed:
 
-1. Within about a minute, the `ExternalSecret` will pull your edited
-   value and overwrite the consumer Kubernetes `Secret` with it, and
-   it will **stay there** (nothing pushes the old value back anymore).
-2. **The actual credential still never rotates on its own**:
-   CloudNativePG only reads `keycloak-db-credentials`/
-   `wordpress-mariadb-credentials` once, at database bootstrap (no CNPG
-   `managed.roles` is configured here), and Keycloak/WordPress only
-   read their secrets as env vars at pod startup. Neither Postgres's
-   real role password, MariaDB's real user password, nor a running
-   pod's in-memory config changes just because the Vault value changed.
-3. **This can cause an outage with no real security benefit on its
+#### `keycloak/db-credentials` and `wordpress/mariadb-credentials` — **auto-rotated**
+
+These two are the only secrets with native operator-level support for
+continuous password reconciliation, so this demo wires it up end to
+end — editing either of these in Vault **does** rotate the real,
+live database credential, with no manual steps or restarts required:
+
+- `keycloak-db-credentials` carries a `cnpg.io/reload: "true"` label
+  (added via `vaultBackedSecret`'s `extraLabels`), which makes
+  CloudNativePG reconcile immediately on any change to the Secret. A
+  dedicated `DatabaseRole` resource (`keycloak-postgres-role` in
+  `composition.yaml`, a `postgresql.cnpg.io/v1 DatabaseRole` applied
+  via `provider-kubernetes`) continuously watches that same Secret and
+  runs `ALTER ROLE ... PASSWORD ...` against the live `keycloak`
+  Postgres role whenever it changes.
+- `wordpress-mariadb-credentials` carries a `k8s.mariadb.com/watch:
+  "true"` label, which mariadb-operator's `MariaDB` CR natively
+  understands for its inline `passwordSecretKeyRef` — it watches the
+  Secret and runs `ALTER USER ... IDENTIFIED BY ...` against the live
+  MariaDB user whenever it changes.
+- In both cases this is **credential rotation only** — the already
+  established connections in a running Postgres/WordPress pod session
+  aren't forcibly dropped, but any new connection (including the next
+  one a restarted pod makes) must use the new password. No
+  CrashLoopBackOff risk for *this* pair of secrets.
+- MariaDB's **root** password (`rootPasswordSecretKeyRef`) has no
+  equivalent watch-support in mariadb-operator, so it is intentionally
+  **not** part of this rotation path — only the WordPress application
+  user is automated.
+
+#### Every other secret (`keycloak/admin-secret`, `keycloak/demo-user-password`, `wordpress/oidc-client-secret`, `wordpress/admin-secret`) — **manual rotation + restart required**
+
+Keycloak and WordPress only read these as environment variables at pod
+startup — there is no operator watching them for live changes. If you
+edit one of these in Vault:
+
+1. **The actual credential never rotates on its own.** Neither
+   Keycloak's admin/demo-user password, the OIDC client secret, nor
+   WordPress's admin password changes just because the Vault value
+   changed — only the Kubernetes `Secret` does.
+2. **This can cause an outage with no real security benefit on its
    own**: if the affected pod happens to restart while your edited
    (now-mismatched) value is live in its Secret, it will try to
-   authenticate with the wrong credential and crash-loop until you
-   either revert the Vault value or manually rotate the backing
-   datastore's real credential to match.
+   authenticate with the wrong credential and fail/crash-loop until
+   you either revert the Vault value or manually rotate the real
+   credential to match.
 
-**To actually rotate a credential**, edit the value in Vault (or
+**To actually rotate one of these**, edit the value in Vault (or
 `kubectl delete secret <consumer-secret>` to force an immediate
 `ExternalSecret` re-sync) **and** separately rotate the real credential
-in the backing system it protects (e.g. run
-`ALTER USER ... PASSWORD ...` in Postgres/MariaDB, or re-run the
-Keycloak admin/user password reset via its own API/console) **and**
-restart the consumer pod so it picks up the new value — so all three
-stay in sync. This demo has no automation for any of those steps.
+through Keycloak's own admin API/console, **and** restart the
+consumer pod so it picks up the new value — so both stay in sync.
+This demo has no automation for these; it's left as an exercise for a
+production-grade follow-up (e.g. a Keycloak `User`/`Client` reconciler
+equivalent to CNPG's `DatabaseRole`, if/when `provider-keycloak`
+grows one).
 
