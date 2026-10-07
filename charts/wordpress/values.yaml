@@ -17,6 +17,14 @@ service:
   type: ClusterIP
   port: 80
 
+# When set, pins WP_HOME/WP_SITEURL (via wp-config.php constants) and the
+# `wp core install --url` to this externally-reachable URL (e.g. a
+# reverse-proxy's https://host:port/wordpress path) instead of the default
+# internal Service hostname, so every generated link/asset URL also works
+# correctly from a browser outside the cluster. Leave empty to use the
+# internal Service hostname only.
+externalUrl: ""
+
 persistence:
   size: 2Gi
   storageClassName: ""

@@ -1,0 +1,45 @@
+events {}
+http {
+  # Resolve upstream hostnames at request time (via variables) rather
+  # than at nginx startup, so this proxy starts successfully even
+  # before the WordPress/Keycloak Services exist yet (e.g. while the
+  # Crossplane claim is still provisioning them). ${RESOLVER_IP} is
+  # substituted at container startup from the pod's own
+  # /etc/resolv.conf nameserver (i.e. the cluster's DNS Service IP),
+  # so this works regardless of the cluster's Service CIDR.
+  resolver ${RESOLVER_IP} valid=10s;
+
+  server {
+    listen {{ .Values.reverseProxy.port }} ssl;
+    ssl_certificate     /etc/nginx/tls/tls.crt;
+    ssl_certificate_key /etc/nginx/tls/tls.key;
+
+    location = / {
+      return 200 "crossplane-experiments demo\n/wordpress -> WordPress\n/keycloak  -> Keycloak\n";
+      add_header Content-Type text/plain;
+    }
+
+    location /wordpress/ {
+      set $wordpress_upstream wordpress.default.svc.cluster.local;
+      proxy_pass http://$wordpress_upstream/;
+      # Pass through the real external Host header (not the internal
+      # Service hostname): WordPress is configured (via WP_HOME /
+      # WP_SITEURL constants) to expect this proxy's external
+      # host:port, and some of its URL-canonicalization logic keys
+      # off the request's Host header rather than those constants --
+      # forwarding a mismatched internal hostname caused broken
+      # 301 redirects to a bogus hybrid internal/external URL.
+      proxy_set_header Host $http_host;
+      proxy_set_header X-Forwarded-Proto https;
+      proxy_set_header X-Forwarded-For $remote_addr;
+    }
+
+    location /keycloak/ {
+      set $keycloak_upstream keycloak-http.default.svc.cluster.local;
+      proxy_pass http://$keycloak_upstream/;
+      proxy_set_header Host keycloak-http.default.svc.cluster.local;
+      proxy_set_header X-Forwarded-Proto https;
+      proxy_set_header X-Forwarded-For $remote_addr;
+    }
+  }
+}

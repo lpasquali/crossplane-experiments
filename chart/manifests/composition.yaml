@@ -444,6 +444,14 @@ spec:
                   namespace: default
                   values:
                     fullnameOverride: wordpress
+                    {{- if .Values.reverseProxy.enabled }}
+                    # Pins WP_HOME/WP_SITEURL to the reverse-proxy's
+                    # externally-reachable /wordpress path, so every
+                    # generated link/asset URL (CSS, JS, permalinks) works
+                    # correctly from a browser outside the cluster, not
+                    # just from the internal Service hostname.
+                    externalUrl: "https://{{ .Values.reverseProxy.hostname }}:{{ .Values.reverseProxy.port }}/wordpress"
+                    {{- end }}
                     database:
                       host: wordpress-mariadb.default.svc.cluster.local
                       port: 3306

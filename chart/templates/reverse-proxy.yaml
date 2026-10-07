@@ -37,44 +37,7 @@ metadata:
   name: reverse-proxy-conf
 data:
   nginx.conf.template: |
-    events {}
-    http {
-      # Resolve upstream hostnames at request time (via variables) rather
-      # than at nginx startup, so this proxy starts successfully even
-      # before the WordPress/Keycloak Services exist yet (e.g. while the
-      # Crossplane claim is still provisioning them). ${RESOLVER_IP} is
-      # substituted at container startup from the pod's own
-      # /etc/resolv.conf nameserver (i.e. the cluster's DNS Service IP),
-      # so this works regardless of the cluster's Service CIDR.
-      resolver ${RESOLVER_IP} valid=10s;
-
-      server {
-        listen {{ .Values.reverseProxy.port }} ssl;
-        ssl_certificate     /etc/nginx/tls/tls.crt;
-        ssl_certificate_key /etc/nginx/tls/tls.key;
-
-        location = / {
-          return 200 "crossplane-experiments demo\n/wordpress -> WordPress\n/keycloak  -> Keycloak\n";
-          add_header Content-Type text/plain;
-        }
-
-        location /wordpress/ {
-          set $wordpress_upstream wordpress.default.svc.cluster.local;
-          proxy_pass http://$wordpress_upstream/;
-          proxy_set_header Host wordpress.default.svc.cluster.local;
-          proxy_set_header X-Forwarded-Proto https;
-          proxy_set_header X-Forwarded-For $remote_addr;
-        }
-
-        location /keycloak/ {
-          set $keycloak_upstream keycloak-http.default.svc.cluster.local;
-          proxy_pass http://$keycloak_upstream/;
-          proxy_set_header Host keycloak-http.default.svc.cluster.local;
-          proxy_set_header X-Forwarded-Proto https;
-          proxy_set_header X-Forwarded-For $remote_addr;
-        }
-      }
-    }
+{{ tpl (.Files.Get "files/reverse-proxy-nginx.conf.template") . | indent 4 }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -91,6 +54,11 @@ spec:
     metadata:
       labels:
         app: reverse-proxy
+      annotations:
+        # Forces a pod restart whenever the nginx config template changes,
+        # since nginx only reads its config at startup and ConfigMap
+        # volume updates alone don't trigger a reload.
+        checksum/config: {{ tpl (.Files.Get "files/reverse-proxy-nginx.conf.template") . | sha256sum }}
     spec:
       containers:
         - name: nginx

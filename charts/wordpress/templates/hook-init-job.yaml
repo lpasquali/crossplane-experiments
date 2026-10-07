@@ -37,7 +37,7 @@ spec:
               if ! wp core is-installed --path=/var/www/html --allow-root; then
                 echo "Running wp core install..."
                 wp core install --path=/var/www/html --allow-root \
-                  --url="http://{{ include "wordpress.fullname" . }}" \
+                  --url="{{ .Values.externalUrl | default (printf "http://%s" (include "wordpress.fullname" .)) }}" \
                   --title="WordPress" \
                   --admin_user="{{ .Values.admin.user }}" \
                   --admin_password="$WORDPRESS_ADMIN_PASSWORD" \

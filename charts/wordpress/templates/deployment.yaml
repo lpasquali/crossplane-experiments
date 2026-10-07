@@ -8,11 +8,11 @@ spec:
   replicas: {{ .Values.replicaCount }}
   selector:
     matchLabels:
-      {{- include "wordpress.labels" . | nindent 6 }}
+      {{- include "wordpress.selectorLabels" . | nindent 6 }}
   template:
     metadata:
       labels:
-        {{- include "wordpress.labels" . | nindent 8 }}
+        {{- include "wordpress.selectorLabels" . | nindent 8 }}
     spec:
       {{- if .Values.oidc.enabled }}
       # Downloads (idempotently) the daggerhart-openid-connect-generic
@@ -66,17 +66,31 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.oidc.clientSecretExistingSecret }}
                   key: {{ .Values.oidc.clientSecretKey }}
+            {{- end }}
+            {{- if or .Values.externalUrl .Values.oidc.enabled }}
             # These wp-config.php constants take precedence over any
-            # DB-stored plugin settings, so WordPress can ONLY ever
-            # authenticate against this single OIDC client/realm.
+            # DB-stored options, so:
+            #  - WP_HOME/WP_SITEURL are pinned to the externally-reachable
+            #    URL (e.g. the reverse-proxy's /wordpress path) when set,
+            #    so every generated link/asset URL works both inside the
+            #    cluster and from a browser outside it, instead of
+            #    defaulting to the internal Service hostname.
+            #  - the OIDC plugin settings are pinned so WordPress can ONLY
+            #    ever authenticate against this single OIDC client/realm.
             - name: WORDPRESS_CONFIG_EXTRA
               value: |
+                {{- if .Values.externalUrl }}
+                define('WP_HOME', '{{ .Values.externalUrl }}');
+                define('WP_SITEURL', '{{ .Values.externalUrl }}');
+                {{- end }}
+                {{- if .Values.oidc.enabled }}
                 define('OPENID_CONNECT_GENERIC_CLIENT_ID', '{{ .Values.oidc.clientId }}');
                 define('OPENID_CONNECT_GENERIC_CLIENT_SECRET', getenv('OIDC_CLIENT_SECRET'));
                 define('OPENID_CONNECT_GENERIC_SCOPE', '{{ .Values.oidc.scope }}');
                 define('OPENID_CONNECT_GENERIC_ENDPOINT_LOGIN_URL', '{{ .Values.oidc.loginUrl }}');
                 define('OPENID_CONNECT_GENERIC_ENDPOINT_USERINFO_URL', '{{ .Values.oidc.userinfoUrl }}');
                 define('OPENID_CONNECT_GENERIC_ENDPOINT_TOKEN_URL', '{{ .Values.oidc.tokenUrl }}');
+                {{- end }}
             {{- end }}
           volumeMounts:
             - name: wp-data
