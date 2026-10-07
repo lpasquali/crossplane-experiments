@@ -224,7 +224,12 @@ charts:
 # =====================================================================
 reverseProxy:
   enabled: true
-  hostname: crossplane-experiment
+  # Name the BROWSER uses to reach the proxy (baked into the TLS cert,
+  # Keycloak issuer and OIDC redirect URIs). Not tied to the VM hostname.
+  # "localhost" works with no /etc/hosts edit (e.g. via an SSH tunnel);
+  # for remote access override it, e.g.
+  #   --set reverseProxy.hostname=<vm-ip-or-dns-name>
+  hostname: localhost
   port: 9443
   nodePort: 30443
 
