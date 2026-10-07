@@ -1,0 +1,172 @@
+# =====================================================================
+# Fail the Helm release loudly if the demo environment doesn't actually
+# work end to end, instead of reporting "deployed" on a cluster where
+# WordPress 500s or OIDC login is silently broken. Runs as a LATER
+# post-install/post-upgrade hook (weight "10", after bootstrap-apply's
+# weight "0" has applied every manifest), so by the time this Job
+# starts every Crossplane-managed resource at least exists; this Job
+# then waits for the claim/WordPress to become genuinely Ready and
+# proves the OIDC wiring (realm/demo user/client secret all correct)
+# with a real Keycloak password-grant token request -- the same check
+# a human would do by hand after any install.
+# =====================================================================
+{{- if .Values.claim.enabled }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: post-install-smoketest
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "10"
+    "helm.sh/hook-delete-policy": before-hook-creation
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: post-install-smoketest
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "10"
+    "helm.sh/hook-delete-policy": before-hook-creation
+subjects:
+  - kind: ServiceAccount
+    name: post-install-smoketest
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  # Needs to read our own CRD (appenvironments.platform.spindox.it),
+  # which isn't covered by the built-in "view" ClusterRole's
+  # aggregation labels; cluster-admin matches the rest of this chart's
+  # existing hook Jobs (bootstrap-apply) and this is a throwaway kind
+  # demo, so no meaningfully different risk profile.
+  kind: ClusterRole
+  name: cluster-admin
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: post-install-smoketest
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 0
+  # Generous: the retry/self-heal loops below already bound each phase
+  # individually, and a slow node (large image pulls) can legitimately
+  # need several minutes per phase. This is just the outer ceiling.
+  activeDeadlineSeconds: 2700
+  template:
+    spec:
+      serviceAccountName: post-install-smoketest
+      restartPolicy: Never
+      containers:
+        - name: smoketest
+          # Same image as bootstrap-apply: ships both kubectl and curl.
+          image: alpine/k8s:1.30.3
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+
+              CLAIM_NAME="{{ .Values.claim.name }}"
+              CLAIM_NS="{{ .Values.claim.namespace }}"
+              REALM="{{ .Values.claim.realmName }}"
+              DEMO_USER="{{ .Values.claim.demoUserName }}"
+              KC_URL="http://keycloak-http.default.svc.cluster.local{{ ternary "/keycloak" "" .Values.reverseProxy.enabled }}"
+              WP_URL="http://wordpress.default.svc.cluster.local{{ if .Values.reverseProxy.enabled }}/wordpress{{ end }}"
+
+              echo "==> Waiting for AppEnvironment claim '$CLAIM_NAME' (ns $CLAIM_NS) to exist..."
+              until kubectl get appenvironment.platform.spindox.it "$CLAIM_NAME" -n "$CLAIM_NS" >/dev/null 2>&1; do
+                echo "    claim not created yet, retrying..."
+                sleep 5
+              done
+
+              # NOT a hard `kubectl wait --for=condition=Ready` gate here on
+              # purpose: provider-helm has a known status-reporting lag
+              # where a Release's own Ready condition can get stuck at
+              # "False"/Unavailable from an earlier transient hook-Job
+              # timeout even after status.atProvider.state has genuinely
+              # settled to "deployed" (see README's "benign/cosmetic
+              # quirk" note) -- the Composite/Claim's rolled-up Ready
+              # condition inherits that same stale False forever, so
+              # waiting on it here could block indefinitely despite the
+              # environment actually working fine. Log it best-effort,
+              # then fall through to the real, ground-truth checks below
+              # (actual pod rollout + an actual Keycloak login) instead.
+              echo "==> Best-effort check of claim Ready condition (known to lag; not a hard gate)..."
+              kubectl wait --for=condition=Ready "appenvironment.platform.spindox.it/$CLAIM_NAME" -n "$CLAIM_NS" --timeout=180s \
+                || echo "    claim not (yet) reporting Ready=True -- continuing anyway with direct checks below."
+
+              # Known race on slow nodes: provider-helm's own Helm-SDK
+              # install/upgrade call uses a short, non-configurable
+              # internal timeout (no CRD field exists for it), so a
+              # Release can land in Helm "failed" state purely because
+              # its post-install hook Job was still pulling a large image
+              # when that timeout fired -- even though the hook Job goes
+              # on to complete successfully moments later. provider-helm
+              # doesn't retry on its own without a spec change, so detect
+              # that specific stuck state and nudge it by patching in a
+              # throwaway value, same fix documented in this chart's
+              # history for exactly this failure mode.
+              echo "==> Checking for any Helm Release stuck in a stale 'failed' state, nudging retry if so..."
+              attempt=0
+              while [ "$attempt" -lt 30 ]; do
+                stuck=$(kubectl get release.helm.crossplane.io -o jsonpath='{range .items[?(@.status.atProvider.state=="failed")]}{.metadata.name}{"\n"}{end}' 2>/dev/null || true)
+                if [ -z "$stuck" ]; then
+                  break
+                fi
+                for rel in $stuck; do
+                  echo "    Release/$rel is stuck in Helm 'failed' state; patching to force a retry..."
+                  kubectl patch "release.helm.crossplane.io/$rel" --type merge \
+                    -p "{\"spec\":{\"forProvider\":{\"values\":{\"forceResyncNonce\":\"$(date +%s)-$attempt\"}}}}" || true
+                done
+                attempt=$((attempt + 1))
+                sleep 20
+              done
+
+              echo "==> Waiting for the WordPress Deployment to finish rolling out..."
+              until kubectl get deployment/wordpress -n default >/dev/null 2>&1; do
+                echo "    deployment/wordpress not created yet, retrying..."
+                sleep 5
+              done
+              kubectl rollout status deployment/wordpress -n default --timeout=600s
+
+              echo "==> Confirming WordPress responds over HTTP (internal Service)..."
+              WP_CODE=$(curl -sk -o /dev/null -w '%{http_code}' --max-time 10 "$WP_URL/")
+              echo "    WordPress HTTP status: $WP_CODE"
+              case "$WP_CODE" in
+                2??|3??) ;;
+                *) echo "WordPress did not respond with a 2xx/3xx status (got $WP_CODE)"; exit 1 ;;
+              esac
+
+              echo "==> Testing a real Keycloak OIDC password-grant login as '$DEMO_USER' in realm '$REALM'..."
+              DEMO_PASSWORD=$(kubectl get secret keycloak-demo-user-password -n default -o jsonpath='{.data.password}' | base64 -d)
+              CLIENT_SECRET=$(kubectl get secret wordpress-oidc-client-secret -n default -o jsonpath='{.data.client-secret}' | base64 -d)
+
+              # Give the Composition's Realm/User/Client resources a few
+              # retries: on a very first install they can take a little
+              # longer than the claim's own Ready condition to fully
+              # settle inside Keycloak itself.
+              attempt=0
+              until [ "$attempt" -ge 12 ]; do
+                RESP=$(curl -sk --max-time 10 -X POST \
+                  "$KC_URL/realms/$REALM/protocol/openid-connect/token" \
+                  -d grant_type=password -d "client_id=wordpress" \
+                  -d "client_secret=$CLIENT_SECRET" \
+                  -d "username=$DEMO_USER" -d "password=$DEMO_PASSWORD") || RESP=""
+                case "$RESP" in
+                  *access_token*) echo "    OIDC login succeeded (access_token received)."; break ;;
+                esac
+                attempt=$((attempt + 1))
+                echo "    attempt $attempt/12: no access_token yet, retrying in 10s... ($RESP)"
+                sleep 10
+              done
+              case "$RESP" in
+                *access_token*) ;;
+                *) echo "OIDC login as $DEMO_USER in realm $REALM never succeeded: $RESP"; exit 1 ;;
+              esac
+
+              echo "==> Smoke test passed: WordPress is up and Keycloak OIDC login works end to end."
+{{- end }}

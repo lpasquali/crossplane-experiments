@@ -248,6 +248,31 @@ flowchart TB
   asynchronously by Crossplane's package manager are applied via a
   `post-install,post-upgrade` hook Job (`chart/templates/bootstrap-apply.yaml`)
   that polls for the CRDs before applying.
+- A second, later-running `post-install,post-upgrade` hook Job
+  (`chart/templates/post-install-smoketest.yaml`) waits for the
+  WordPress `Deployment` to actually roll out and then performs a real
+  Keycloak OIDC password-grant login as the demo user, failing the
+  `helm install`/`helm upgrade` itself (non-zero exit) if either check
+  doesn't pass — so a `helm` command reporting success is real
+  end-to-end proof the demo works, not just that every Crossplane
+  resource was *created*. It also self-heals the one known
+  `provider-helm` flakiness this demo hits on slower machines: a
+  Release's own Helm-SDK install/upgrade call can time out (no
+  configurable timeout field exists on the `Release` CRD) while a
+  large image is still being pulled for its post-install hook Job,
+  landing the Release in Helm's `failed` state even though that hook
+  Job goes on to complete successfully moments later. If you ever hit
+  this by hand (`kubectl get release.helm.crossplane.io` showing
+  `STATE: failed` for a Release whose own hook Job has actually
+  completed), the fix is the same one the smoke test automates:
+  `kubectl patch release.helm.crossplane.io/<name> --type merge -p
+  '{"spec":{"forProvider":{"values":{"forceResyncNonce":"<any new
+  value>"}}}}'` to force `provider-helm` to detect drift and retry.
+  The smoke test deliberately does **not** hard-gate on the Claim's own
+  `Ready` condition first, since that condition can stay stuck at
+  `False` from this same stale-Release-status lag long after the
+  environment is actually healthy — it relies on the real,
+  ground-truth checks instead.
 
 ### Changing a vaulted secret's value directly in the Vault UI
 

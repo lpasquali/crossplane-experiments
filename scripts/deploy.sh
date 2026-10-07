@@ -27,6 +27,20 @@ fi
 echo "==> Packaging the self-authored WordPress chart..."
 ./scripts/build-charts.sh
 
+# `helm dependency build` resolves each chart/Chart.yaml dependency's
+# `repository` URL against the LOCAL repo cache (~/.config/helm/repositories.yaml)
+# -- it does NOT fetch straight from an inline URL the way `helm install
+# some/chart --repo <url>` does, so every non-OCI repository referenced
+# there must already be registered via `helm repo add` first, or this
+# fails with "no repository definition for ...". Idempotent: `helm repo
+# add` no-ops (with a warning) if the name+URL already match.
+echo "==> Ensuring Helm dependency repos are registered..."
+helm repo add crossplane-stable https://charts.crossplane.io/stable >/dev/null
+helm repo add cloudnative-pg https://cloudnative-pg.github.io/charts >/dev/null
+helm repo add hashicorp https://helm.releases.hashicorp.com >/dev/null
+helm repo add external-secrets https://charts.external-secrets.io >/dev/null
+helm repo update crossplane-stable cloudnative-pg hashicorp external-secrets >/dev/null
+
 echo "==> Refreshing umbrella chart's Helm dependencies..."
 helm dependency build chart/
 
