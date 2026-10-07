@@ -1,0 +1,97 @@
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: xappenvironments.apps.example.org
+spec:
+  compositeTypeRef:
+    apiVersion: apps.example.org/v1alpha1
+    kind: XAppEnvironment
+  mode: Pipeline
+  pipeline:
+    - step: patch-and-transform
+      functionRef:
+        name: function-patch-and-transform
+      input:
+        apiVersion: pt.fn.crossplane.io/v1beta1
+        kind: Resources
+        resources:
+
+          # -------------------------------------------------------------
+          # 1. PostgreSQL Database Secret
+          # -------------------------------------------------------------
+          - name: db-secret
+            base:
+              apiVersion: kubernetes.crossplane.io/v1alpha1
+              kind: Object
+              spec:
+                providerConfigRef:
+                  name: default
+                forProvider:
+                  manifest:
+                    apiVersion: v1
+                    kind: Secret
+                    metadata:
+                      name: app-db-credentials
+                      namespace: default
+                    type: Opaque
+                    stringData:
+                      username: appuser
+                      password: ""
+            patches:
+              - type: FromCompositeFieldPath
+                fromFieldPath: spec.dbPassword
+                toFieldPath: spec.forProvider.manifest.stringData.password
+
+          # -------------------------------------------------------------
+          # 2. CloudNativePG Postgres Cluster (PostGIS Enabled)
+          # -------------------------------------------------------------
+          - name: cnpg-cluster
+            base:
+              apiVersion: kubernetes.crossplane.io/v1alpha1
+              kind: Object
+              spec:
+                providerConfigRef:
+                  name: default
+                forProvider:
+                  manifest:
+                    apiVersion: postgresql.cnpg.io/v1
+                    kind: Cluster
+                    metadata:
+                      name: app-postgres
+                      namespace: default
+                    spec:
+                      instances: 1
+                      imageName: ghcr.io/cloudnative-pg/postgis:18-3-standard-trixie
+                      storage:
+                        size: 2Gi
+                      superuserSecret:
+                        name: app-db-credentials
+
+          # -------------------------------------------------------------
+          # 3. WordPress (Helm Release)
+          # -------------------------------------------------------------
+          - name: helm-wordpress
+            base:
+              apiVersion: helm.crossplane.io/v1beta1
+              kind: Release
+              spec:
+                providerConfigRef:
+                  name: default
+                forProvider:
+                  chart:
+                    name: wordpress
+                    repository: https://charts.bitnami.com/bitnami
+                    version: 34.1.2
+                  namespace: default
+                  values:
+                    mariadb:
+                      enabled: false
+                    externalDatabase:
+                      host: app-postgres-rw.default.svc.cluster.local
+                      port: 5432
+                      user: appuser
+                      database: wordpress
+                      existingSecret: app-db-credentials
+                      secretProperties:
+                        passwordKey: password
+
