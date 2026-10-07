@@ -4,7 +4,7 @@ replicaCount: 1
 
 image:
   repository: wordpress
-  tag: "6.7-apache"
+  tag: "7.1.3-apache"
   pullPolicy: IfNotPresent
 
 # Image used for the init container that fetches the OIDC plugin, and for
