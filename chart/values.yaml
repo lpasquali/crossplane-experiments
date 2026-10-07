@@ -212,7 +212,7 @@ charts:
   # nginx static file server, see templates/chart-registry.yaml), built
   # from charts/wordpress/ via scripts/build-charts.sh.
   wordpress:
-    version: 0.1.7
+    version: 0.1.8
 
 # =====================================================================
 # Reverse proxy exposing the demo over a single external URL:
