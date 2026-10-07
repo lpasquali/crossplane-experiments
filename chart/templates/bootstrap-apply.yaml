@@ -155,14 +155,8 @@ data:
       name: {{ .Values.claim.name }}
       namespace: {{ .Values.claim.namespace }}
     spec:
-      dbPassword: {{ .Values.claim.dbPassword | quote }}
       realmName: {{ .Values.claim.realmName | quote }}
-      keycloakAdminPassword: {{ .Values.claim.keycloakAdminPassword | quote }}
-      wordpressDbPassword: {{ .Values.claim.wordpressDbPassword | quote }}
-      oidcClientSecret: {{ .Values.claim.oidcClientSecret | quote }}
       demoUserName: {{ .Values.claim.demoUserName | quote }}
-      demoUserPassword: {{ .Values.claim.demoUserPassword | quote }}
-      wordpressAdminPassword: {{ .Values.claim.wordpressAdminPassword | quote }}
   {{- end }}
 ---
 apiVersion: batch/v1
@@ -189,6 +183,75 @@ spec:
             - -c
             - |
               set -e
+
+              # -----------------------------------------------------------
+              # Seed Vault (the actual source of truth for every password/
+              # secret this demo uses) BEFORE applying anything Crossplane-
+              # related, so the ExternalSecrets the Composition creates
+              # always find real data on their very first sync attempt.
+              # Idempotent: only ever writes a path that doesn't already
+              # have data, so re-running `helm upgrade` never rotates or
+              # clobbers an existing deployment's secrets. Vault itself is
+              # a Helm chart dependency of this same release, so it may
+              # still be starting up when this Job starts -- wait for it.
+              # -----------------------------------------------------------
+              VAULT_ADDR="http://vault.{{ .Release.Namespace }}.svc.cluster.local:8200"
+              VAULT_TOKEN="{{ .Values.vault.server.dev.devRootToken }}"
+              VAULT_MOUNT="{{ .Values.vaultSecrets.mount }}"
+
+              echo "Waiting for Vault to be reachable..."
+              until curl -sf -o /dev/null "$VAULT_ADDR/v1/sys/health?standbyok=true"; do sleep 5; done
+
+              # 32 url-safe random chars from /dev/urandom -- no openssl in
+              # this image, so base64 + tr is the portable equivalent.
+              rand() {
+                head -c 48 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 32
+              }
+
+              # $1 = path under $VAULT_MOUNT/data/, $2 = JSON object to
+              # store (becomes KV-v2's "data" field). Skips writing if the
+              # path already has data (any HTTP 200 from a GET), so this is
+              # safe to run on every helm install/upgrade.
+              seed_if_absent() {
+                path="$1"; body="$2"
+                code=$(curl -s -o /dev/null -w '%{http_code}' -H "X-Vault-Token: $VAULT_TOKEN" "$VAULT_ADDR/v1/$VAULT_MOUNT/data/$path")
+                if [ "$code" = "200" ]; then
+                  echo "Vault path $path already seeded, leaving it as-is."
+                  return 0
+                fi
+                echo "Seeding Vault path $path..."
+                curl -sf -H "X-Vault-Token: $VAULT_TOKEN" -H "Content-Type: application/json" \
+                  -X POST -d "{\"data\": $body}" "$VAULT_ADDR/v1/$VAULT_MOUNT/data/$path" >/dev/null
+              }
+
+              KC_DB_PW="{{ .Values.vaultSecrets.seedOverrides.keycloakDbPassword }}"
+              [ -z "$KC_DB_PW" ] && KC_DB_PW="$(rand)"
+              seed_if_absent "keycloak/db-credentials" "{\"username\":\"keycloak\",\"password\":\"$KC_DB_PW\"}"
+
+              KC_ADMIN_PW="{{ .Values.vaultSecrets.seedOverrides.keycloakAdminPassword }}"
+              [ -z "$KC_ADMIN_PW" ] && KC_ADMIN_PW="$(rand)"
+              seed_if_absent "keycloak/admin-secret" "{\"admin-password\":\"$KC_ADMIN_PW\"}"
+
+              KC_DEMO_PW="{{ .Values.vaultSecrets.seedOverrides.keycloakDemoUserPassword }}"
+              [ -z "$KC_DEMO_PW" ] && KC_DEMO_PW="$(rand)"
+              seed_if_absent "keycloak/demo-user-password" "{\"password\":\"$KC_DEMO_PW\"}"
+
+              WP_OIDC_SECRET="{{ .Values.vaultSecrets.seedOverrides.wordpressOidcClientSecret }}"
+              [ -z "$WP_OIDC_SECRET" ] && WP_OIDC_SECRET="$(rand)"
+              seed_if_absent "wordpress/oidc-client-secret" "{\"client-secret\":\"$WP_OIDC_SECRET\"}"
+
+              # Independent root/app passwords (unlike the old claim-based
+              # flow, which reused a single value for both).
+              WP_DB_ROOT_PW="{{ .Values.vaultSecrets.seedOverrides.wordpressMariadbRootPassword }}"
+              [ -z "$WP_DB_ROOT_PW" ] && WP_DB_ROOT_PW="$(rand)"
+              WP_DB_PW="{{ .Values.vaultSecrets.seedOverrides.wordpressMariadbPassword }}"
+              [ -z "$WP_DB_PW" ] && WP_DB_PW="$(rand)"
+              seed_if_absent "wordpress/mariadb-credentials" "{\"root-password\":\"$WP_DB_ROOT_PW\",\"password\":\"$WP_DB_PW\"}"
+
+              WP_ADMIN_PW="{{ .Values.vaultSecrets.seedOverrides.wordpressAdminPassword }}"
+              [ -z "$WP_ADMIN_PW" ] && WP_ADMIN_PW="$(rand)"
+              seed_if_absent "wordpress/admin-secret" "{\"password\":\"$WP_ADMIN_PW\"}"
+
               echo "Waiting for Crossplane core CRDs (functions, providers)..."
               for crd in functions.pkg.crossplane.io \
                          providers.pkg.crossplane.io; do

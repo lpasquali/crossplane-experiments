@@ -168,14 +168,38 @@ providers:
   providerVault: xpkg.upbound.io/upbound/provider-vault:v4.0.4
 
 # =====================================================================
-# HashiCorp Vault mount used by the Composition's SecretV2 +
-# ExternalSecret resources (see composition.yaml). The address is
-# always http://vault.<Release.Namespace>.svc.cluster.local:8200 since
-# Vault is installed as a dependency into this same release/namespace.
+# HashiCorp Vault mount used by the Composition's ExternalSecret
+# resources (see composition.yaml). The address is always
+# http://vault.<Release.Namespace>.svc.cluster.local:8200 since Vault
+# is installed as a dependency into this same release/namespace.
 # "secret" is Vault dev-mode's auto-enabled KV-v2 engine.
+#
+# Vault is the ACTUAL source of truth for every password/secret this
+# demo uses -- none of them are claim/Helm-values fields (a claim's
+# spec is stored in plaintext in etcd and shows up in plain
+# `kubectl get -o yaml`/`helm get values` output, which is a bad place
+# for a secret). Instead, a one-time seeding step in the
+# bootstrap-apply Job writes a cryptographically random value straight
+# into each Vault path below, but ONLY if that path doesn't already
+# have one -- so re-running `helm upgrade` never rotates/clobbers an
+# existing deployment's secrets, same as before.
+#
+# seedOverrides lets you pin a specific value instead of a random one
+# (purely for CI/reproducible-demo purposes) -- each is used only the
+# first time its Vault path is seeded; leave blank for a random value.
+# See README's "Changing a vaulted secret's value" section for why
+# editing the value in Vault's UI *after* it's seeded doesn't work.
 # =====================================================================
 vaultSecrets:
   mount: secret
+  seedOverrides:
+    keycloakDbPassword: ""
+    keycloakAdminPassword: ""
+    keycloakDemoUserPassword: ""
+    wordpressOidcClientSecret: ""
+    wordpressMariadbRootPassword: ""
+    wordpressMariadbPassword: ""
+    wordpressAdminPassword: ""
 
 # =====================================================================
 # Chart versions used inside the Composition (non-Bitnami)
@@ -214,11 +238,5 @@ claim:
   enabled: true
   name: dev-environment
   namespace: default
-  dbPassword: "SuperSecurePass123!"
   realmName: "faggeta"
-  keycloakAdminPassword: "amanita"
-  wordpressDbPassword: "WordPressDbPass123!"
-  oidcClientSecret: "wordpress-oidc-client-secret-CHANGE-ME"
   demoUserName: "boletus"
-  demoUserPassword: "cappella"
-  wordpressAdminPassword: "WordPressAdminPass123!"

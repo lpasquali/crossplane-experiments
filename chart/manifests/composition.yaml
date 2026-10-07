@@ -44,10 +44,6 @@ spec:
             "secretName" "keycloak-db-credentials"
             "secretNamespace" "default"
             "vaultPath" "keycloak/db-credentials"
-            "jsonFmt" "{\"username\":\"keycloak\",\"password\":\"%s\"}"
-            "fields" (list "spec.dbPassword")
-            "Release" .Release
-            "Values" .Values
           ) | nindent 10 }}
 
           # -------------------------------------------------------------
@@ -101,10 +97,6 @@ spec:
             "secretName" "keycloak-admin-secret"
             "secretNamespace" "default"
             "vaultPath" "keycloak/admin-secret"
-            "jsonFmt" "{\"admin-password\":\"%s\"}"
-            "fields" (list "spec.keycloakAdminPassword")
-            "Release" .Release
-            "Values" .Values
           ) | nindent 10 }}
 
           # -------------------------------------------------------------
@@ -114,6 +106,16 @@ spec:
           #    instance this same pipeline deploys. Service name
           #    "keycloak-http" is the keycloakx chart's fixed naming
           #    convention (fullname + "-http").
+          #
+          #    Built directly by a SECOND ExternalSecret reading the same
+          #    Vault path as #3 above (rather than a Composition patch
+          #    pulling from the composite's spec): the admin password has
+          #    no claim-spec field at all -- Vault is its only source of
+          #    truth -- so there's nothing for a FromCompositeFieldPath/
+          #    CombineFromComposite patch to read here. ESO's own
+          #    target.template does the string-building instead, using
+          #    its "{{ .adminPassword }}" templating (escaped below so
+          #    Helm's `tpl` leaves it alone for ESO to evaluate later).
           # -------------------------------------------------------------
           - name: keycloak-provider-creds-secret
             base:
@@ -124,23 +126,28 @@ spec:
                   name: default
                 forProvider:
                   manifest:
-                    apiVersion: v1
-                    kind: Secret
+                    apiVersion: external-secrets.io/v1
+                    kind: ExternalSecret
                     metadata:
-                      name: keycloak-admin-creds
+                      name: keycloak-provider-creds-sync
                       namespace: {{ .Release.Namespace }}
-                    type: Opaque
-                    stringData:
-                      credentials: ""
-            patches:
-              - type: CombineFromComposite
-                combine:
-                  variables:
-                    - fromFieldPath: spec.keycloakAdminPassword
-                  strategy: string
-                  string:
-                    fmt: '{"url":"http://keycloak-http.default.svc.cluster.local{{ $kcPath }}","client_id":"admin-cli","username":"admin","password":"%s"}'
-                toFieldPath: spec.forProvider.manifest.stringData.credentials
+                    spec:
+                      refreshInterval: 1m
+                      secretStoreRef:
+                        name: vault-backend
+                        kind: ClusterSecretStore
+                      target:
+                        name: keycloak-admin-creds
+                        creationPolicy: Owner
+                        template:
+                          data:
+                            credentials: |
+                              {"url":"http://keycloak-http.default.svc.cluster.local{{ $kcPath }}","client_id":"admin-cli","username":"admin","password":"{{ "{{ .adminPassword }}" }}"}
+                      data:
+                        - secretKey: adminPassword
+                          remoteRef:
+                            key: keycloak/admin-secret
+                            property: admin-password
 
           # -------------------------------------------------------------
           # 5. Keycloak (Helm Release via codecentric/keycloakx), backed by
@@ -257,10 +264,6 @@ spec:
             "secretName" "keycloak-demo-user-password"
             "secretNamespace" "default"
             "vaultPath" "keycloak/demo-user-password"
-            "jsonFmt" "{\"password\":\"%s\"}"
-            "fields" (list "spec.demoUserPassword")
-            "Release" .Release
-            "Values" .Values
           ) | nindent 10 }}
 
           - name: keycloak-demo-user
@@ -403,10 +406,6 @@ spec:
             "secretName" "wordpress-oidc-client-secret"
             "secretNamespace" "default"
             "vaultPath" "wordpress/oidc-client-secret"
-            "jsonFmt" "{\"client-secret\":\"%s\"}"
-            "fields" (list "spec.oidcClientSecret")
-            "Release" .Release
-            "Values" .Values
           ) | nindent 10 }}
 
           # -------------------------------------------------------------
@@ -464,10 +463,6 @@ spec:
             "secretName" "wordpress-mariadb-credentials"
             "secretNamespace" "default"
             "vaultPath" "wordpress/mariadb-credentials"
-            "jsonFmt" "{\"root-password\":\"%s\",\"password\":\"%s\"}"
-            "fields" (list "spec.wordpressDbPassword" "spec.wordpressDbPassword")
-            "Release" .Release
-            "Values" .Values
           ) | nindent 10 }}
 
           # -------------------------------------------------------------
@@ -524,10 +519,6 @@ spec:
             "secretName" "wordpress-admin-secret"
             "secretNamespace" "default"
             "vaultPath" "wordpress/admin-secret"
-            "jsonFmt" "{\"password\":\"%s\"}"
-            "fields" (list "spec.wordpressAdminPassword")
-            "Release" .Release
-            "Values" .Values
           ) | nindent 10 }}
 
           # -------------------------------------------------------------

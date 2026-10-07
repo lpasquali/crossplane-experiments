@@ -20,37 +20,21 @@ spec:
           properties:
             spec:
               type: object
+              # No passwords/secrets live here on purpose: every credential
+              # this demo uses is generated directly in Vault (the actual
+              # source of truth) by a one-time seeding step in the
+              # bootstrap-apply Job, then read back out via ExternalSecrets
+              # -- see chart/templates/_helpers.tpl's vaultBackedSecret and
+              # the README's "Changing a vaulted secret's value" section.
+              # A claim/XRD spec field is a poor place for a secret: it's
+              # stored in plaintext in etcd and shows up in plain
+              # `kubectl get -o yaml`/`helm get values` output.
               properties:
-                dbPassword:
-                  type: string
-                  description: "Password for the PostgreSQL database backing Keycloak"
                 realmName:
                   type: string
                   default: "setup"
                   description: "Keycloak realm that WordPress is allowed to authenticate against"
-                keycloakAdminPassword:
-                  type: string
-                  default: "KeycloakAdminPass123!"
-                  description: "Password for the Keycloak admin console user"
-                wordpressDbPassword:
-                  type: string
-                  default: "WordPressDbPass123!"
-                  description: "Password for the MariaDB database backing WordPress"
-                oidcClientSecret:
-                  type: string
-                  default: "wordpress-oidc-client-secret-CHANGE-ME"
-                  description: "Client secret shared between WordPress and its Keycloak OIDC client"
                 demoUserName:
                   type: string
                   default: "demo-user"
                   description: "Username for the demo Keycloak user created in the realm (also admin of that realm and of WordPress)"
-                demoUserPassword:
-                  type: string
-                  default: "DemoUserPass123!"
-                  description: "Password for the demo Keycloak user created in the realm"
-                wordpressAdminPassword:
-                  type: string
-                  default: "WordPressAdminPass123!"
-                  description: "Password for the WordPress admin account created by wp-cli"
-              required:
-                - dbPassword

@@ -4,9 +4,16 @@ A single Helm "umbrella" chart that stands up a complete demo of a
 Crossplane Composition provisioning **WordPress + Keycloak + MariaDB
 (for WordPress) + PostgreSQL (for Keycloak)**, with WordPress
 authenticating exclusively against Keycloak's `setup` realm via OIDC.
-Every generated secret (DB passwords, Keycloak admin password, etc) is
-sourced from **HashiCorp Vault** and synced into native Kubernetes
-Secrets by the **External Secrets Operator**.
+
+Every password/secret this demo uses (DB passwords, Keycloak admin
+password, etc) is generated and stored **only in HashiCorp Vault** —
+never in the Crossplane Claim, in Helm values, or anywhere else
+plaintext-readable via `kubectl get -o yaml`/`helm get values`. A
+one-time idempotent seeding step (part of the `bootstrap-apply` hook
+Job) writes a random value into each Vault path the first time it's
+missing; the **External Secrets Operator** then continuously pulls
+those values out of Vault into native Kubernetes Secrets for every
+consumer to read, same as before.
 
 No Bitnami images/charts are used anywhere. Every component is either
 an official upstream chart/image or self-authored:
@@ -137,8 +144,7 @@ flowchart TB
     end
 
     subgraph XRD["Crossplane Composition pipeline (XAppEnvironment)"]
-        SECV2["provider-vault SecretV2\n(writes generated creds)"]
-        ES["ExternalSecret\n(reads creds back)"]
+        ES["ExternalSecret\n(reads Vault-seeded creds)"]
         KCPG["CloudNativePG Cluster\n(Keycloak DB)"]
         KC["Keycloak Helm Release\n(codecentric/keycloakx)"]
         REALM["Realm / User / Client / Role\n(provider-keycloak)"]
@@ -146,8 +152,9 @@ flowchart TB
         WP["WordPress Helm Release\n(self-authored chart)"]
     end
 
-    VAULT -- "secret material" --> SECV2
-    SECV2 --> VAULT
+    SEED["bootstrap-apply Job:\nseed Vault if path absent"]
+
+    SEED -- "random value, first run only" --> VAULT
     VAULT -- "read via ClusterSecretStore" --> ESO
     ESO --> ES
     ES -- "K8s Secret" --> KCPG
@@ -169,16 +176,20 @@ flowchart TB
     User(("Browser")) -- "https://crossplane-experiment:9443" --> PROXY
 ```
 
-- Vault is the single source of truth for every generated secret
-  (DB passwords, Keycloak admin password, etc). The Composition writes
-  each secret into Vault via `provider-vault`'s `SecretV2`, then reads
-  it back into a native Kubernetes `Secret` via an `ExternalSecret`
-  backed by ESO's `ClusterSecretStore` (`vault-backend`) — see the
-  `vaultBackedSecret` helper in `chart/templates/_helpers.tpl` and the
+- Vault is the actual source of truth for every password/secret this
+  demo uses — not the Claim, not Helm values. The `bootstrap-apply` hook
+  Job seeds each Vault path with a random value exactly once (only if
+  that path has no data yet, so `helm upgrade` never rotates/clobbers
+  an existing deployment's secrets); the Composition then only ever
+  *reads* from Vault, via an `ExternalSecret` backed by ESO's
+  `ClusterSecretStore` (`vault-backend`) — see the `vaultBackedSecret`
+  helper in `chart/templates/_helpers.tpl`, the seeding script and
   ProviderConfig/ClusterSecretStore wiring in
-  `chart/templates/bootstrap-apply.yaml`. This keeps every existing
-  consumer (Helm chart values, `provider-kubernetes` Objects) reading a
-  plain Secret, unchanged.
+  `chart/templates/bootstrap-apply.yaml`, and `vaultSecrets.seedOverrides`
+  in `chart/values.yaml` if you need a pinned (non-random) value for
+  CI/reproducibility. This keeps every existing consumer (Helm chart
+  values, `provider-kubernetes` Objects) reading a plain Secret,
+  unchanged.
 - WordPress's OIDC plugin (`daggerhart-openid-connect-generic`) is
   configured with endpoint URLs hardcoded to `realms/setup` only — it
   cannot authenticate against any other Keycloak realm.
@@ -197,17 +208,15 @@ Every secret in the table above (`keycloak/db-credentials`,
 `keycloak/admin-secret`, `keycloak/demo-user-password`,
 `wordpress/oidc-client-secret`, `wordpress/mariadb-credentials`,
 `wordpress/admin-secret`) is reachable and editable through the Vault
-UI (`/vault` or `/ui/`, see "Single external URL" above). **Editing
-one of these values directly in Vault is not an effective, durable, or
-safe way to rotate a credential in this demo** — for cybersecurity
-awareness, here's exactly why, tracing the actual data flow in
-`chart/templates/_helpers.tpl`'s `vaultBackedSecret` helper:
+UI (`/vault` or `/ui/`, see "Single external URL" above). Vault really
+is this demo's only source of truth for these values now — there's no
+Crossplane push loop to revert your edit — **but an in-place Vault
+edit still isn't enough to rotate a live credential**, for cybersecurity
+awareness, here's exactly why, tracing the actual data flow:
 
 ```
-XAppEnvironment claim's spec.<field> (e.g. spec.dbPassword)
-   --(Crossplane patch, continuously enforced)-->
-plain Kubernetes Secret (<id>-vault-source)
-   --(provider-vault SecretV2, continuously enforced)-->
+bootstrap-apply Job (one-time, only if path has no data yet)
+   --(random value, or vaultSecrets.seedOverrides.* if set)-->
 Vault KV path (e.g. keycloak/db-credentials)   <-- you'd edit here
    --(ExternalSecret, refreshInterval: 1m, pull-only)-->
 Kubernetes Secret actually consumed by the app (e.g. keycloak-db-credentials)
@@ -218,32 +227,28 @@ the running Postgres role password / app's in-memory config
 If you edit the value **in Vault**, the following happens:
 
 1. Within about a minute, the `ExternalSecret` will pull your edited
-   value and overwrite the consumer Kubernetes `Secret` with it.
-2. **Crossplane will eventually revert it anyway**: the `SecretV2`
-   resource keeps declaratively pushing the *original* value (derived
-   from the claim's `spec.<field>`) back into that same Vault path on
-   its own reconcile loop — your edit is not durable.
-3. **The actual credential never rotates**: CloudNativePG only reads
-   `keycloak-db-credentials`/`wordpress-mariadb-credentials` once, at
-   database bootstrap (no CNPG `managed.roles` is configured here), and
-   Keycloak/WordPress only read their secrets as env vars at pod
-   startup. Neither Postgres's real role password, MariaDB's real user
-   password, nor a running pod's in-memory config changes just because
-   the Vault value changed.
-4. **This can cause an outage with no real security benefit**: if the
-   affected pod happens to restart while your edited (now-mismatched)
-   value is live in its Secret, it will try to authenticate with the
-   wrong credential and crash-loop until the Secret reverts back to the
-   correct value (step 2) or you manually fix the backing datastore to
-   match.
+   value and overwrite the consumer Kubernetes `Secret` with it, and
+   it will **stay there** (nothing pushes the old value back anymore).
+2. **The actual credential still never rotates on its own**:
+   CloudNativePG only reads `keycloak-db-credentials`/
+   `wordpress-mariadb-credentials` once, at database bootstrap (no CNPG
+   `managed.roles` is configured here), and Keycloak/WordPress only
+   read their secrets as env vars at pod startup. Neither Postgres's
+   real role password, MariaDB's real user password, nor a running
+   pod's in-memory config changes just because the Vault value changed.
+3. **This can cause an outage with no real security benefit on its
+   own**: if the affected pod happens to restart while your edited
+   (now-mismatched) value is live in its Secret, it will try to
+   authenticate with the wrong credential and crash-loop until you
+   either revert the Vault value or manually rotate the backing
+   datastore's real credential to match.
 
-**To actually rotate a credential**, change the corresponding field
-(`dbPassword`, `keycloakAdminPassword`, `demoUserPassword`,
-`oidcClientSecret`, `wordpressDbPassword`, `wordpressAdminPassword`) on
-the `AppEnvironment` claim itself (`helm upgrade` with a new value, or
-`kubectl edit appenvironment dev-environment`) — that's the one place
-Crossplane treats as the actual source of truth — **and** separately
-rotate the real credential in the backing system it protects (e.g. run
+**To actually rotate a credential**, edit the value in Vault (or
+`kubectl delete secret <consumer-secret>` to force an immediate
+`ExternalSecret` re-sync) **and** separately rotate the real credential
+in the backing system it protects (e.g. run
 `ALTER USER ... PASSWORD ...` in Postgres/MariaDB, or re-run the
-Keycloak admin/user password reset via its own API/console) so the two
-stay in sync. This demo has no automation for that second step.
+Keycloak admin/user password reset via its own API/console) **and**
+restart the consumer pod so it picks up the new value — so all three
+stay in sync. This demo has no automation for any of those steps.
+
