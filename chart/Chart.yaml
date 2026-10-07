@@ -1,0 +1,26 @@
+apiVersion: v2
+name: crossplane-experiments
+description: >
+  One-command Crossplane demo: WordPress + Keycloak + MariaDB (for
+  WordPress) + PostgreSQL (for Keycloak), composed via a single Crossplane
+  Composition. WordPress authenticates only against the Keycloak "setup"
+  realm. No Bitnami charts/images are used anywhere in this stack.
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+dependencies:
+  # Crossplane itself (official chart).
+  - name: crossplane
+    version: 2.4.2
+    repository: https://charts.crossplane.io/stable
+    condition: crossplane.enabled
+  # CloudNativePG operator (official chart), used for Keycloak's Postgres.
+  - name: cloudnative-pg
+    version: 0.29.1
+    repository: https://cloudnative-pg.github.io/charts
+    condition: cloudnative-pg.enabled
+  # mariadb-operator (official chart), used for WordPress's MariaDB.
+  - name: mariadb-operator
+    version: 26.10.1
+    repository: oci://ghcr.io/mariadb-operator/charts
+    condition: mariadb-operator.enabled

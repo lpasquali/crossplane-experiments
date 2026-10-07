@@ -1,0 +1,492 @@
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: xappenvironments.apps.example.org
+spec:
+  compositeTypeRef:
+    apiVersion: apps.example.org/v1alpha1
+    kind: XAppEnvironment
+  mode: Pipeline
+  pipeline:
+    - step: patch-and-transform
+      functionRef:
+        name: function-patch-and-transform
+      input:
+        apiVersion: pt.fn.crossplane.io/v1beta1
+        kind: Resources
+        resources:
+
+          # =================================================================
+          # KEYCLOAK: PostgreSQL backend (CloudNativePG, unchanged - already
+          # non-Bitnami)
+          # =================================================================
+
+          # -------------------------------------------------------------
+          # 1. Keycloak's PostgreSQL app-user credentials
+          # -------------------------------------------------------------
+          - name: keycloak-db-secret
+            base:
+              apiVersion: kubernetes.crossplane.io/v1alpha1
+              kind: Object
+              spec:
+                providerConfigRef:
+                  name: default
+                forProvider:
+                  manifest:
+                    apiVersion: v1
+                    kind: Secret
+                    metadata:
+                      name: keycloak-db-credentials
+                      namespace: default
+                    type: Opaque
+                    stringData:
+                      username: keycloak
+                      password: ""
+            patches:
+              - type: FromCompositeFieldPath
+                fromFieldPath: spec.dbPassword
+                toFieldPath: spec.forProvider.manifest.stringData.password
+
+          # -------------------------------------------------------------
+          # 2. CloudNativePG Postgres Cluster dedicated to Keycloak
+          # -------------------------------------------------------------
+          - name: keycloak-postgres-cluster
+            base:
+              apiVersion: kubernetes.crossplane.io/v1alpha1
+              kind: Object
+              spec:
+                providerConfigRef:
+                  name: default
+                forProvider:
+                  manifest:
+                    apiVersion: postgresql.cnpg.io/v1
+                    kind: Cluster
+                    metadata:
+                      name: keycloak-postgres
+                      namespace: default
+                    spec:
+                      instances: 1
+                      storage:
+                        size: 2Gi
+                      bootstrap:
+                        initdb:
+                          database: keycloak
+                          owner: keycloak
+                          secret:
+                            name: keycloak-db-credentials
+
+          # =================================================================
+          # KEYCLOAK: Helm release (codecentric/keycloakx chart - official
+          # quay.io/keycloak/keycloak image, NOT Bitnami) + admin credentials
+          # =================================================================
+
+          # -------------------------------------------------------------
+          # 3. Keycloak admin console password
+          # -------------------------------------------------------------
+          - name: keycloak-admin-secret
+            base:
+              apiVersion: kubernetes.crossplane.io/v1alpha1
+              kind: Object
+              spec:
+                providerConfigRef:
+                  name: default
+                forProvider:
+                  manifest:
+                    apiVersion: v1
+                    kind: Secret
+                    metadata:
+                      name: keycloak-admin-secret
+                      namespace: default
+                    type: Opaque
+                    stringData:
+                      admin-password: ""
+            patches:
+              - type: FromCompositeFieldPath
+                fromFieldPath: spec.keycloakAdminPassword
+                toFieldPath: spec.forProvider.manifest.stringData.admin-password
+
+          # -------------------------------------------------------------
+          # 4. provider-keycloak admin credentials secret. This is what the
+          #    Keycloak ProviderConfig (02-provider-configs.yaml) reads, so
+          #    the Realm/User/Client resources below can reach the Keycloak
+          #    instance this same pipeline deploys. Service name
+          #    "keycloak-http" is the keycloakx chart's fixed naming
+          #    convention (fullname + "-http").
+          # -------------------------------------------------------------
+          - name: keycloak-provider-creds-secret
+            base:
+              apiVersion: kubernetes.crossplane.io/v1alpha1
+              kind: Object
+              spec:
+                providerConfigRef:
+                  name: default
+                forProvider:
+                  manifest:
+                    apiVersion: v1
+                    kind: Secret
+                    metadata:
+                      name: keycloak-admin-creds
+                      namespace: {{ .Release.Namespace }}
+                    type: Opaque
+                    stringData:
+                      credentials: ""
+            patches:
+              - type: CombineFromComposite
+                combine:
+                  variables:
+                    - fromFieldPath: spec.keycloakAdminPassword
+                  strategy: string
+                  string:
+                    fmt: '{"url":"http://keycloak-http.default.svc.cluster.local","client_id":"admin-cli","username":"admin","password":"%s"}'
+                toFieldPath: spec.forProvider.manifest.stringData.credentials
+
+          # -------------------------------------------------------------
+          # 5. Keycloak (Helm Release via codecentric/keycloakx), backed by
+          #    its own CloudNativePG Postgres Cluster. Image tag is pinned
+          #    (not "latest") for reproducibility.
+          # -------------------------------------------------------------
+          - name: helm-keycloak
+            base:
+              apiVersion: helm.crossplane.io/v1beta1
+              kind: Release
+              spec:
+                providerConfigRef:
+                  name: default
+                forProvider:
+                  chart:
+                    name: keycloakx
+                    repository: {{ .Values.charts.keycloakx.repository }}
+                    version: {{ .Values.charts.keycloakx.version | quote }}
+                  namespace: default
+                  values:
+                    fullnameOverride: keycloak
+                    replicas: 1
+                    args:
+                      - "start"
+                    image:
+                      repository: quay.io/keycloak/keycloak
+                      tag: "26.7.4"
+                    http:
+                      relativePath: "/"
+                    proxy:
+                      enabled: false
+                    database:
+                      vendor: postgres
+                      hostname: keycloak-postgres-rw.default.svc.cluster.local
+                      port: 5432
+                      database: keycloak
+                      username: keycloak
+                      existingSecret: keycloak-db-credentials
+                      existingSecretKey: password
+                    extraEnv: |
+                      - name: KC_BOOTSTRAP_ADMIN_USERNAME
+                        value: admin
+                      - name: KC_BOOTSTRAP_ADMIN_PASSWORD
+                        valueFrom:
+                          secretKeyRef:
+                            name: keycloak-admin-secret
+                            key: admin-password
+                      - name: KC_HOSTNAME_STRICT
+                        value: "false"
+
+          # =================================================================
+          # KEYCLOAK: Realm/User/Client (realm is the ONLY one WordPress may
+          # authenticate against) - provider-keycloak, unchanged
+          # =================================================================
+
+          # -------------------------------------------------------------
+          # 6. Keycloak Realm (default name: "setup")
+          # -------------------------------------------------------------
+          - name: keycloak-realm
+            base:
+              apiVersion: realm.keycloak.crossplane.io/v1alpha1
+              kind: Realm
+              metadata:
+                name: setup-realm
+              spec:
+                providerConfigRef:
+                  name: default
+                forProvider:
+                  realm: "setup"
+                  enabled: true
+                  displayName: "Setup Realm"
+            patches:
+              - type: FromCompositeFieldPath
+                fromFieldPath: spec.realmName
+                toFieldPath: spec.forProvider.realm
+              - type: FromCompositeFieldPath
+                fromFieldPath: spec.realmName
+                toFieldPath: spec.forProvider.displayName
+
+          # -------------------------------------------------------------
+          # 7. Demo Keycloak user, created inside the "setup" realm only
+          # -------------------------------------------------------------
+          - name: keycloak-demo-user-secret
+            base:
+              apiVersion: kubernetes.crossplane.io/v1alpha1
+              kind: Object
+              spec:
+                providerConfigRef:
+                  name: default
+                forProvider:
+                  manifest:
+                    apiVersion: v1
+                    kind: Secret
+                    metadata:
+                      name: keycloak-demo-user-password
+                      namespace: {{ .Release.Namespace }}
+                    type: Opaque
+                    stringData:
+                      password: ""
+            patches:
+              - type: FromCompositeFieldPath
+                fromFieldPath: spec.demoUserPassword
+                toFieldPath: spec.forProvider.manifest.stringData.password
+
+          - name: keycloak-demo-user
+            base:
+              apiVersion: user.keycloak.crossplane.io/v1alpha1
+              kind: User
+              metadata:
+                name: demo-user
+              spec:
+                providerConfigRef:
+                  name: default
+                forProvider:
+                  realmId: "setup"
+                  username: "demo-user"
+                  enabled: true
+                  email: "demo-user@setup.local"
+                  firstName: "Demo"
+                  lastName: "User"
+                  emailVerified: true
+                  initialPassword:
+                    - valueSecretRef:
+                        namespace: {{ .Release.Namespace }}
+                        name: keycloak-demo-user-password
+                        key: password
+                      temporary: false
+            patches:
+              - type: FromCompositeFieldPath
+                fromFieldPath: spec.realmName
+                toFieldPath: spec.forProvider.realmId
+
+          # -------------------------------------------------------------
+          # 8. WordPress OIDC Client secret (consumed via clientSecretSecretRef)
+          # -------------------------------------------------------------
+          - name: wordpress-oidc-client-secret
+            base:
+              apiVersion: kubernetes.crossplane.io/v1alpha1
+              kind: Object
+              spec:
+                providerConfigRef:
+                  name: default
+                forProvider:
+                  manifest:
+                    apiVersion: v1
+                    kind: Secret
+                    metadata:
+                      name: wordpress-oidc-client-secret
+                      namespace: default
+                    type: Opaque
+                    stringData:
+                      client-secret: ""
+            patches:
+              - type: FromCompositeFieldPath
+                fromFieldPath: spec.oidcClientSecret
+                toFieldPath: spec.forProvider.manifest.stringData.client-secret
+
+          # -------------------------------------------------------------
+          # 9. WordPress OIDC Client, scoped to the "setup" realm only
+          # -------------------------------------------------------------
+          - name: wordpress-oidc-client
+            base:
+              apiVersion: openidclient.keycloak.crossplane.io/v1alpha1
+              kind: Client
+              metadata:
+                name: wordpress-oidc-client
+              spec:
+                providerConfigRef:
+                  name: default
+                forProvider:
+                  realmId: "setup"
+                  clientId: "wordpress"
+                  name: "WordPress OIDC Client"
+                  enabled: true
+                  accessType: "CONFIDENTIAL"
+                  standardFlowEnabled: true
+                  directAccessGrantsEnabled: true
+                  clientSecretSecretRef:
+                    name: wordpress-oidc-client-secret
+                    namespace: default
+                    key: client-secret
+                  validRedirectUris:
+                    - "http://wordpress.default.svc.cluster.local/*"
+                    - "http://wordpress.default.svc.cluster.local/wp-login.php?action=openid-connect-authorize"
+            patches:
+              - type: FromCompositeFieldPath
+                fromFieldPath: spec.realmName
+                toFieldPath: spec.forProvider.realmId
+
+          # =================================================================
+          # WORDPRESS: MariaDB-backed (mariadb-operator, NOT a Bitnami
+          # subchart), authenticating via the OIDC plugin against the
+          # Keycloak "setup" realm only
+          # =================================================================
+
+          # -------------------------------------------------------------
+          # 10. MariaDB credentials for WordPress
+          # -------------------------------------------------------------
+          - name: wordpress-mariadb-secret
+            base:
+              apiVersion: kubernetes.crossplane.io/v1alpha1
+              kind: Object
+              spec:
+                providerConfigRef:
+                  name: default
+                forProvider:
+                  manifest:
+                    apiVersion: v1
+                    kind: Secret
+                    metadata:
+                      name: wordpress-mariadb-credentials
+                      namespace: default
+                    type: Opaque
+                    stringData:
+                      root-password: ""
+                      password: ""
+            patches:
+              - type: FromCompositeFieldPath
+                fromFieldPath: spec.wordpressDbPassword
+                toFieldPath: spec.forProvider.manifest.stringData.root-password
+              - type: FromCompositeFieldPath
+                fromFieldPath: spec.wordpressDbPassword
+                toFieldPath: spec.forProvider.manifest.stringData.password
+
+          # -------------------------------------------------------------
+          # 11. MariaDB database for WordPress, managed by mariadb-operator
+          #     (cluster infra installed by the umbrella chart). The
+          #     operator creates a Service named identically to this CR
+          #     ("wordpress-mariadb"), confirmed against the live cluster.
+          # -------------------------------------------------------------
+          - name: wordpress-mariadb
+            base:
+              apiVersion: kubernetes.crossplane.io/v1alpha1
+              kind: Object
+              spec:
+                providerConfigRef:
+                  name: default
+                forProvider:
+                  manifest:
+                    apiVersion: k8s.mariadb.com/v1alpha1
+                    kind: MariaDB
+                    metadata:
+                      name: wordpress-mariadb
+                      namespace: default
+                    spec:
+                      image: mariadb:11.4
+                      port: 3306
+                      database: wordpress
+                      username: wordpress
+                      rootPasswordSecretKeyRef:
+                        name: wordpress-mariadb-credentials
+                        key: root-password
+                      passwordSecretKeyRef:
+                        name: wordpress-mariadb-credentials
+                        key: password
+                      storage:
+                        size: 2Gi
+
+          # -------------------------------------------------------------
+          # 12. WordPress admin account password (used by the wp-cli
+          #     post-install hook Job inside our own WordPress chart)
+          # -------------------------------------------------------------
+          - name: wordpress-admin-secret
+            base:
+              apiVersion: kubernetes.crossplane.io/v1alpha1
+              kind: Object
+              spec:
+                providerConfigRef:
+                  name: default
+                forProvider:
+                  manifest:
+                    apiVersion: v1
+                    kind: Secret
+                    metadata:
+                      name: wordpress-admin-secret
+                      namespace: default
+                    type: Opaque
+                    stringData:
+                      password: ""
+            patches:
+              - type: FromCompositeFieldPath
+                fromFieldPath: spec.wordpressAdminPassword
+                toFieldPath: spec.forProvider.manifest.stringData.password
+
+          # -------------------------------------------------------------
+          # 13. WordPress (Helm Release), using our self-authored chart
+          #     pulled from the in-cluster OCI registry (NOT Bitnami), the
+          #     mariadb-operator-managed database, and the OIDC plugin
+          #     locked to the Keycloak "setup" realm.
+          # -------------------------------------------------------------
+          - name: helm-wordpress
+            base:
+              apiVersion: helm.crossplane.io/v1beta1
+              kind: Release
+              spec:
+                providerConfigRef:
+                  name: default
+                forProvider:
+                  chart:
+                    name: wordpress
+                    repository: http://chart-registry.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.chartRegistry.port }}
+                    version: {{ .Values.charts.wordpress.version | quote }}
+                  namespace: default
+                  values:
+                    fullnameOverride: wordpress
+                    database:
+                      host: wordpress-mariadb.default.svc.cluster.local
+                      port: 3306
+                      name: wordpress
+                      user: wordpress
+                      existingSecret: wordpress-mariadb-credentials
+                      passwordKey: password
+                    admin:
+                      existingSecret: wordpress-admin-secret
+                      passwordKey: password
+                    oidc:
+                      enabled: true
+                      clientId: wordpress
+                      clientSecretExistingSecret: wordpress-oidc-client-secret
+                      clientSecretKey: client-secret
+                      # loginUrl/userinfoUrl/tokenUrl are fully replaced by
+                      # the CombineFromComposite patch below, which pins
+                      # them to the Keycloak "setup" realm ONLY.
+                      loginUrl: ""
+                      userinfoUrl: ""
+                      tokenUrl: ""
+            patches:
+              - type: CombineFromComposite
+                combine:
+                  variables:
+                    - fromFieldPath: spec.realmName
+                  strategy: string
+                  string:
+                    fmt: "http://keycloak-http.default.svc.cluster.local/realms/%s/protocol/openid-connect/auth"
+                toFieldPath: spec.forProvider.values.oidc.loginUrl
+              - type: CombineFromComposite
+                combine:
+                  variables:
+                    - fromFieldPath: spec.realmName
+                  strategy: string
+                  string:
+                    fmt: "http://keycloak-http.default.svc.cluster.local/realms/%s/protocol/openid-connect/userinfo"
+                toFieldPath: spec.forProvider.values.oidc.userinfoUrl
+              - type: CombineFromComposite
+                combine:
+                  variables:
+                    - fromFieldPath: spec.realmName
+                  strategy: string
+                  string:
+                    fmt: "http://keycloak-http.default.svc.cluster.local/realms/%s/protocol/openid-connect/token"
+                toFieldPath: spec.forProvider.values.oidc.tokenUrl

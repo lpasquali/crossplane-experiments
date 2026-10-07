@@ -1,0 +1,101 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "wordpress.fullname" . }}
+  labels:
+    {{- include "wordpress.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "wordpress.labels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "wordpress.labels" . | nindent 8 }}
+    spec:
+      {{- if .Values.oidc.enabled }}
+      # Downloads (idempotently) the daggerhart-openid-connect-generic
+      # plugin straight from wordpress.org directly into the shared
+      # wp-content/plugins directory. No Bitnami image or packaging involved.
+      initContainers:
+        - name: install-oidc-plugin
+          image: {{ .Values.pluginFetcherImage }}
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              apk add --no-cache curl unzip >/dev/null
+              mkdir -p /var/www/html/wp-content/plugins
+              if [ ! -d "/var/www/html/wp-content/plugins/{{ .Values.oidc.pluginSlug }}" ]; then
+                echo "Downloading {{ .Values.oidc.pluginSlug }} plugin..."
+                curl -fsSL -o /tmp/oidc-plugin.zip \
+                  "https://downloads.wordpress.org/plugin/{{ .Values.oidc.pluginSlug }}.latest-stable.zip"
+                unzip -q /tmp/oidc-plugin.zip -d /var/www/html/wp-content/plugins/
+                rm -f /tmp/oidc-plugin.zip
+              else
+                echo "{{ .Values.oidc.pluginSlug }} plugin already present, skipping download"
+              fi
+          volumeMounts:
+            - name: wp-data
+              mountPath: /var/www/html
+      {{- end }}
+      containers:
+        - name: wordpress
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 80
+          env:
+            - name: WORDPRESS_DB_HOST
+              value: "{{ .Values.database.host }}:{{ .Values.database.port }}"
+            - name: WORDPRESS_DB_NAME
+              value: {{ .Values.database.name | quote }}
+            - name: WORDPRESS_DB_USER
+              value: {{ .Values.database.user | quote }}
+            - name: WORDPRESS_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.database.existingSecret }}
+                  key: {{ .Values.database.passwordKey }}
+            {{- if .Values.oidc.enabled }}
+            - name: OIDC_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.oidc.clientSecretExistingSecret }}
+                  key: {{ .Values.oidc.clientSecretKey }}
+            # These wp-config.php constants take precedence over any
+            # DB-stored plugin settings, so WordPress can ONLY ever
+            # authenticate against this single OIDC client/realm.
+            - name: WORDPRESS_CONFIG_EXTRA
+              value: |
+                define('OPENID_CONNECT_GENERIC_CLIENT_ID', '{{ .Values.oidc.clientId }}');
+                define('OPENID_CONNECT_GENERIC_CLIENT_SECRET', getenv('OIDC_CLIENT_SECRET'));
+                define('OPENID_CONNECT_GENERIC_SCOPE', '{{ .Values.oidc.scope }}');
+                define('OPENID_CONNECT_GENERIC_ENDPOINT_LOGIN_URL', '{{ .Values.oidc.loginUrl }}');
+                define('OPENID_CONNECT_GENERIC_ENDPOINT_USERINFO_URL', '{{ .Values.oidc.userinfoUrl }}');
+                define('OPENID_CONNECT_GENERIC_ENDPOINT_TOKEN_URL', '{{ .Values.oidc.tokenUrl }}');
+            {{- end }}
+          volumeMounts:
+            - name: wp-data
+              mountPath: /var/www/html
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      volumes:
+        - name: wp-data
+          persistentVolumeClaim:
+            claimName: {{ include "wordpress.fullname" . }}

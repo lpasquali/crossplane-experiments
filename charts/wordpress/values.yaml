@@ -1,0 +1,61 @@
+fullnameOverride: ""
+
+replicaCount: 1
+
+image:
+  repository: wordpress
+  tag: "6.7-apache"
+  pullPolicy: IfNotPresent
+
+# Image used for the init container that fetches the OIDC plugin, and for
+# the post-install/post-upgrade wp-cli hook Job (core install + plugin
+# activation). Must be wp-cli compatible; the official "wordpress:cli" image
+# is used for the hook Job regardless of this value.
+pluginFetcherImage: "alpine:3.20"
+
+service:
+  type: ClusterIP
+  port: 80
+
+persistence:
+  size: 2Gi
+  storageClassName: ""
+
+# Connection details for the external MariaDB/MySQL database. The password
+# is always read from an existing Secret (never inlined in values).
+database:
+  host: ""
+  port: 3306
+  name: wordpress
+  user: wordpress
+  existingSecret: ""
+  passwordKey: password
+
+# Initial WordPress admin account, created idempotently by the post-install
+# hook Job (`wp core install`) if WordPress isn't already installed.
+admin:
+  user: admin
+  email: admin@example.local
+  existingSecret: ""
+  passwordKey: password
+
+# OIDC (daggerhart-openid-connect-generic plugin) configuration. When
+# enabled, the plugin is downloaded, installed and activated automatically,
+# and pinned (via wp-config.php constants, which override any DB-stored
+# settings) to a single OpenID Connect provider/realm.
+oidc:
+  enabled: true
+  pluginSlug: daggerhart-openid-connect-generic
+  clientId: wordpress
+  clientSecretExistingSecret: ""
+  clientSecretKey: client-secret
+  scope: "openid profile email"
+  loginUrl: ""
+  userinfoUrl: ""
+  tokenUrl: ""
+
+resources: {}
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

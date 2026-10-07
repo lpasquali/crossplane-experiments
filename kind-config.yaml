@@ -1,0 +1,17 @@
+# kind cluster config for the crossplane-experiments demo.
+# Exposes port 9443 on the host, mapped to the reverse-proxy Service's
+# NodePort (30443, see chart/values.yaml reverseProxy.nodePort) inside
+# the cluster, so the demo is reachable at:
+#   https://crossplane-experiment:9443/wordpress
+#   https://crossplane-experiment:9443/keycloak
+# (add a "127.0.0.1 crossplane-experiment" line to /etc/hosts, or just
+# use https://localhost:9443 directly).
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: cnpg-crossplane
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      - containerPort: 30443
+        hostPort: 9443
+        protocol: TCP

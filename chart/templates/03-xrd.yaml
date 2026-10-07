@@ -1,0 +1,56 @@
+apiVersion: apiextensions.crossplane.io/v1
+kind: CompositeResourceDefinition
+metadata:
+  name: xappenvironments.apps.example.org
+spec:
+  group: apps.example.org
+  names:
+    kind: XAppEnvironment
+    plural: xappenvironments
+  claimNames:
+    kind: AppEnvironment
+    plural: appenvironments
+  versions:
+    - name: v1alpha1
+      served: true
+      referenceable: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                dbPassword:
+                  type: string
+                  description: "Password for the PostgreSQL database backing Keycloak"
+                enableGeoserver:
+                  type: boolean
+                  default: true
+                  description: "Optionally deploy GeoServer alongside WordPress"
+                realmName:
+                  type: string
+                  default: "setup"
+                  description: "Keycloak realm that WordPress is allowed to authenticate against"
+                keycloakAdminPassword:
+                  type: string
+                  default: "KeycloakAdminPass123!"
+                  description: "Password for the Keycloak admin console user"
+                wordpressDbPassword:
+                  type: string
+                  default: "WordPressDbPass123!"
+                  description: "Password for the MariaDB database backing WordPress"
+                oidcClientSecret:
+                  type: string
+                  default: "wordpress-oidc-client-secret-CHANGE-ME"
+                  description: "Client secret shared between WordPress and its Keycloak OIDC client"
+                demoUserPassword:
+                  type: string
+                  default: "DemoUserPass123!"
+                  description: "Password for the demo Keycloak user created in the realm"
+                wordpressAdminPassword:
+                  type: string
+                  default: "WordPressAdminPass123!"
+                  description: "Password for the WordPress admin account created by wp-cli"
+              required:
+                - dbPassword

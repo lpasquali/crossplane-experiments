@@ -1,0 +1,12 @@
+dependencies:
+- name: crossplane
+  repository: https://charts.crossplane.io/stable
+  version: 2.4.2
+- name: cloudnative-pg
+  repository: https://cloudnative-pg.github.io/charts
+  version: 0.29.1
+- name: mariadb-operator
+  repository: oci://ghcr.io/mariadb-operator/charts
+  version: 26.10.1
+digest: sha256:b6a8dc30cbbc97ae1ee442fca531c1d126a90b07e4110c38e5d2cff8165500b9
+generated: "2026-10-07T09:27:36.286883947Z"

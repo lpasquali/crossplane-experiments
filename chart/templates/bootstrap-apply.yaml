@@ -1,0 +1,142 @@
+# =====================================================================
+# ProviderConfigs (for provider-helm, provider-kubernetes, provider-keycloak)
+# and the demo AppEnvironment claim reference CRDs that are NOT available
+# immediately at `helm install` time: they come from Crossplane Provider
+# packages (pulled/installed asynchronously by Crossplane's own controller,
+# which itself is only just starting as part of this same release) and from
+# our XAppEnvironment XRD (established asynchronously once Crossplane's core
+# is reconciling). Helm validates every templated manifest against the API
+# server's known types at apply time, so these can't be plain templates in
+# a one-shot install - a post-install hook Job waits for those CRDs to show
+# up, then applies them with kubectl.
+# =====================================================================
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: bootstrap-apply
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: bootstrap-apply
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation
+subjects:
+  - kind: ServiceAccount
+    name: bootstrap-apply
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: ClusterRole
+  name: cluster-admin
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: bootstrap-manifests
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation
+data:
+  provider-configs.yaml: |
+    ---
+    # In-cluster ProviderConfig for Provider Helm
+    apiVersion: helm.crossplane.io/v1beta1
+    kind: ProviderConfig
+    metadata:
+      name: default
+    spec:
+      credentials:
+        source: InjectedIdentity
+    ---
+    # In-cluster ProviderConfig for Provider Kubernetes
+    apiVersion: kubernetes.crossplane.io/v1alpha1
+    kind: ProviderConfig
+    metadata:
+      name: default
+    spec:
+      credentials:
+        source: InjectedIdentity
+    ---
+    # ProviderConfig for Provider Keycloak. The referenced secret is produced
+    # by the Composition itself, once the in-cluster Keycloak Helm release
+    # has been composed by a claim.
+    apiVersion: keycloak.crossplane.io/v1beta1
+    kind: ProviderConfig
+    metadata:
+      name: default
+    spec:
+      credentials:
+        source: Secret
+        secretRef:
+          namespace: {{ .Release.Namespace }}
+          name: keycloak-admin-creds
+          key: credentials
+  {{- if .Values.claim.enabled }}
+  claim.yaml: |
+    apiVersion: apps.example.org/v1alpha1
+    kind: AppEnvironment
+    metadata:
+      name: {{ .Values.claim.name }}
+      namespace: {{ .Values.claim.namespace }}
+    spec:
+      dbPassword: {{ .Values.claim.dbPassword | quote }}
+      enableGeoserver: {{ .Values.claim.enableGeoserver }}
+      realmName: {{ .Values.claim.realmName | quote }}
+      keycloakAdminPassword: {{ .Values.claim.keycloakAdminPassword | quote }}
+      wordpressDbPassword: {{ .Values.claim.wordpressDbPassword | quote }}
+      oidcClientSecret: {{ .Values.claim.oidcClientSecret | quote }}
+      demoUserPassword: {{ .Values.claim.demoUserPassword | quote }}
+      wordpressAdminPassword: {{ .Values.claim.wordpressAdminPassword | quote }}
+  {{- end }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: bootstrap-apply
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 20
+  activeDeadlineSeconds: 900
+  template:
+    spec:
+      serviceAccountName: bootstrap-apply
+      restartPolicy: Never
+      containers:
+        - name: apply
+          # Community-maintained (non-Bitnami) kubectl image.
+          image: alpine/k8s:1.30.3
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              for crd in providerconfigs.helm.crossplane.io \
+                         providerconfigs.kubernetes.crossplane.io \
+                         providerconfigs.keycloak.crossplane.io; do
+                echo "Waiting for CRD $crd to be established..."
+                until kubectl get crd "$crd" >/dev/null 2>&1; do sleep 5; done
+              done
+              kubectl apply -f /manifests/provider-configs.yaml
+              {{- if .Values.claim.enabled }}
+              echo "Waiting for CRD appenvironments.apps.example.org to be established..."
+              until kubectl get crd appenvironments.apps.example.org >/dev/null 2>&1; do sleep 5; done
+              kubectl apply -f /manifests/claim.yaml
+              {{- end }}
+          volumeMounts:
+            - name: manifests
+              mountPath: /manifests
+      volumes:
+        - name: manifests
+          configMap:
+            name: bootstrap-manifests

@@ -1,0 +1,76 @@
+# =====================================================================
+# Cluster infrastructure (installed once, as Helm chart dependencies)
+# =====================================================================
+crossplane:
+  enabled: true
+
+cloudnative-pg:
+  enabled: true
+
+mariadb-operator:
+  enabled: true
+  crds:
+    enabled: true
+
+# =====================================================================
+# In-cluster Helm chart repository (classic HTTP, nginx) hosting our
+# self-authored WordPress chart, embedded from chart/files/*.
+# =====================================================================
+chartRegistry:
+  enabled: true
+  port: 8080
+
+# =====================================================================
+# Crossplane packages/providers used by the demo's Composition
+# =====================================================================
+providers:
+  functionPatchAndTransform: xpkg.upbound.io/crossplane-contrib/function-patch-and-transform:v0.8.0
+  providerHelm: xpkg.upbound.io/crossplane-contrib/provider-helm:v1.4.0
+  providerKubernetes: xpkg.upbound.io/crossplane-contrib/provider-kubernetes:v0.12.0
+  providerKeycloak: xpkg.upbound.io/crossplane-contrib/provider-keycloak:v2.1.0
+
+# =====================================================================
+# Chart versions used inside the Composition (non-Bitnami)
+# =====================================================================
+charts:
+  keycloakx:
+    repository: https://codecentric.github.io/helm-charts
+    version: 7.3.2
+  # Our own chart, served from the in-cluster chart-registry (plain-HTTP
+  # nginx static file server, see templates/chart-registry.yaml), built
+  # from charts/wordpress/ via scripts/build-charts.sh.
+  wordpress:
+    version: 0.1.0
+
+# =====================================================================
+# Reverse proxy exposing the demo over a single external URL:
+#   https://<hostname>:<nodePort> /wordpress  -> the WordPress Service
+#   https://<hostname>:<nodePort> /keycloak   -> the keycloak-http Service
+# TLS is a self-signed cert generated at install time (Helm's
+# genSelfSignedCert); the Service is a NodePort so it can be reached
+# from outside kind via an extraPortMappings entry in kind-config.yaml.
+# =====================================================================
+reverseProxy:
+  enabled: true
+  hostname: crossplane-experiment
+  port: 9443
+  nodePort: 30443
+
+
+# =====================================================================
+# Demo claim. Disable (claim.enabled=false) if you only want the platform
+# (Crossplane + XRD/Composition + infra) installed, without instantiating
+# a demo environment.
+# =====================================================================
+claim:
+  enabled: true
+  name: dev-environment
+  namespace: default
+  dbPassword: "SuperSecurePass123!"
+  enableGeoserver: true
+  realmName: "setup"
+  keycloakAdminPassword: "KeycloakAdminPass123!"
+  wordpressDbPassword: "WordPressDbPass123!"
+  oidcClientSecret: "wordpress-oidc-client-secret-CHANGE-ME"
+  demoUserPassword: "DemoUserPass123!"
+  wordpressAdminPassword: "WordPressAdminPass123!"

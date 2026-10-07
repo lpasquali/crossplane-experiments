@@ -1,0 +1,76 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "wordpress.fullname" . }}-init
+  labels:
+    {{- include "wordpress.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 20
+  template:
+    metadata:
+      labels:
+        {{- include "wordpress.labels" . | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: wp-cli
+          # Official wp-cli image (same docker-library/wordpress project as
+          # the main image, no Bitnami involved). Its entrypoint generates
+          # wp-config.php from WORDPRESS_DB_* env vars the same way the main
+          # "wordpress" image does, so this only has to wait for the main
+          # Deployment's first boot to finish laying down core files.
+          image: wordpress:cli
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              for i in $(seq 1 60); do
+                wp core version --path=/var/www/html --allow-root >/dev/null 2>&1 && break
+                echo "waiting for WordPress core files/config..."
+                sleep 5
+              done
+              if ! wp core is-installed --path=/var/www/html --allow-root; then
+                echo "Running wp core install..."
+                wp core install --path=/var/www/html --allow-root \
+                  --url="http://{{ include "wordpress.fullname" . }}" \
+                  --title="WordPress" \
+                  --admin_user="{{ .Values.admin.user }}" \
+                  --admin_password="$WORDPRESS_ADMIN_PASSWORD" \
+                  --admin_email="{{ .Values.admin.email }}" \
+                  --skip-email
+              else
+                echo "WordPress already installed, skipping core install"
+              fi
+              {{- if .Values.oidc.enabled }}
+              echo "Activating {{ .Values.oidc.pluginSlug }} plugin..."
+              wp plugin activate {{ .Values.oidc.pluginSlug }} --path=/var/www/html --allow-root
+              {{- end }}
+          env:
+            - name: WORDPRESS_DB_HOST
+              value: "{{ .Values.database.host }}:{{ .Values.database.port }}"
+            - name: WORDPRESS_DB_NAME
+              value: {{ .Values.database.name | quote }}
+            - name: WORDPRESS_DB_USER
+              value: {{ .Values.database.user | quote }}
+            - name: WORDPRESS_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.database.existingSecret }}
+                  key: {{ .Values.database.passwordKey }}
+            - name: WORDPRESS_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.admin.existingSecret }}
+                  key: {{ .Values.admin.passwordKey }}
+          volumeMounts:
+            - name: wp-data
+              mountPath: /var/www/html
+      volumes:
+        - name: wp-data
+          persistentVolumeClaim:
+            claimName: {{ include "wordpress.fullname" . }}

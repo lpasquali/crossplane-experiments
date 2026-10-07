@@ -1,8 +1,0 @@
-apiVersion: apps.example.org/v1alpha1
-kind: AppEnvironment
-metadata:
-  name: dev-environment
-  namespace: default
-spec:
-  dbPassword: "SuperSecurePass123!"
-  enableGeoserver: true

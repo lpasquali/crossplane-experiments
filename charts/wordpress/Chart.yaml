@@ -1,0 +1,13 @@
+apiVersion: v2
+name: wordpress
+description: >
+  Minimal WordPress chart built on the official "wordpress" Docker image
+  (no Bitnami). Ships the daggerhart-openid-connect-generic plugin via an
+  init container and activates it (plus runs the initial `wp core install`)
+  via a post-install/post-upgrade Helm hook Job using the official
+  "wordpress:cli" image. Designed to run against an external MariaDB/MySQL
+  database (e.g. one created by mariadb-operator) and a Keycloak OIDC
+  provider.
+type: application
+version: 0.1.0
+appVersion: "6.7-apache"
