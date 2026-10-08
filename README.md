@@ -263,8 +263,8 @@ flowchart TB
   asynchronously by Crossplane's package manager are applied via a
   `post-install,post-upgrade` hook Job (`chart/templates/bootstrap-apply.yaml`)
   that polls for the CRDs before applying.
-- A second, later-running `post-install,post-upgrade` hook Job
-  (`chart/templates/post-install-smoketest.yaml`) waits for the
+- An explicit Helm test Job
+  (`chart/templates/helm-test.yaml`) waits for the
   WordPress `Deployment` to report a ready replica (polling
   `status.readyReplicas` rather than `kubectl rollout status`, which
   keeps failing once the Deployment's progress deadline has been
@@ -272,10 +272,12 @@ flowchart TB
   later), checks WordPress answers over HTTP (printing the `curl` exit
   code if it doesn't), and then performs a real
   Keycloak OIDC password-grant login as the demo user, failing the
-  `helm install`/`helm upgrade` itself (non-zero exit) if either check
-  doesn't pass — so a `helm` command reporting success is real
-  end-to-end proof the demo works, not just that every Crossplane
-  resource was *created*. It also self-heals the one known
+  `helm test` command (non-zero exit) if either check doesn't pass. The
+  deployment script runs this test after installing or upgrading; when
+  using Helm directly, run
+  `helm test crossplane-experiments -n crossplane-system --logs --timeout 5m`.
+  A successful install alone confirms resource creation, while a
+  successful test confirms the end-to-end behavior. It also self-heals the one known
   `provider-helm` flakiness this demo hits on slower machines: a
   Release's own Helm-SDK install/upgrade call can time out (no
   configurable timeout field exists on the `Release` CRD) while a

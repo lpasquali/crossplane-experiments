@@ -19,6 +19,8 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 CLUSTER_NAME="cnpg-crossplane"
 RELEASE_NAME="crossplane-experiments"
 NAMESPACE="crossplane-system"
+KIND_MEMORY_LIMIT="7g"
+KIND_CPU_LIMIT="3"
 VM_HOSTNAME="${VM_HOSTNAME:-$(hostname -f 2>/dev/null || hostname)}"
 
 HELM_ARGS=()
@@ -40,6 +42,12 @@ else
   kind create cluster --config kind-config.yaml
 fi
 
+echo "==> Applying kind node limits (${KIND_MEMORY_LIMIT} RAM, ${KIND_CPU_LIMIT} CPUs)..."
+while IFS= read -r NODE_NAME; do
+  [[ -n "${NODE_NAME}" ]] || continue
+  docker update --memory "${KIND_MEMORY_LIMIT}" --memory-swap "${KIND_MEMORY_LIMIT}" --cpus "${KIND_CPU_LIMIT}" "${NODE_NAME}" >/dev/null
+done < <(kind get nodes --name "${CLUSTER_NAME}")
+
 echo "==> Packaging the self-authored WordPress chart..."
 ./scripts/build-charts.sh
 
@@ -52,10 +60,11 @@ echo "==> Packaging the self-authored WordPress chart..."
 # add` no-ops (with a warning) if the name+URL already match.
 echo "==> Ensuring Helm dependency repos are registered..."
 helm repo add crossplane-stable https://charts.crossplane.io/stable >/dev/null
+helm repo add cnpg https://cloudnative-pg.github.io/charts >/dev/null
 helm repo add cloudnative-pg https://cloudnative-pg.github.io/charts >/dev/null
 helm repo add hashicorp https://helm.releases.hashicorp.com >/dev/null
 helm repo add external-secrets https://charts.external-secrets.io >/dev/null
-helm repo update crossplane-stable cloudnative-pg hashicorp external-secrets >/dev/null
+helm repo update crossplane-stable cnpg cloudnative-pg hashicorp external-secrets >/dev/null
 
 echo "==> Refreshing umbrella chart's Helm dependencies..."
 helm dependency build chart/
@@ -64,6 +73,9 @@ echo "==> Installing/upgrading Helm release '${RELEASE_NAME}' in namespace '${NA
 helm upgrade --install "${RELEASE_NAME}" chart/ \
   --namespace "${NAMESPACE}" --create-namespace \
   --timeout 10m ${HELM_ARGS[@]+"${HELM_ARGS[@]}"}
+
+echo "==> Running Helm end-to-end test for '${RELEASE_NAME}'..."
+helm test "${RELEASE_NAME}" --namespace "${NAMESPACE}" --logs --timeout 5m
 
 cat <<'EOF'
 
