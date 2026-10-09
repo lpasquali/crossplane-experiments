@@ -23,6 +23,7 @@ an official upstream chart/image or self-authored:
 | Component            | Source                                                    |
 |-----------------------|------------------------------------------------------------|
 | Crossplane            | `https://charts.crossplane.io/stable` (official)           |
+| metrics-server        | `https://kubernetes-sigs.github.io/metrics-server/` (official) |
 | CloudNativePG         | `https://cloudnative-pg.github.io/charts` (official)        |
 | mariadb-operator      | `oci://ghcr.io/mariadb-operator/charts` (official)          |
 | HashiCorp Vault       | `https://helm.releases.hashicorp.com` (official, dev-mode)  |
@@ -105,7 +106,13 @@ regenerate the embedded package/index first (the output in
 kubectl get release.helm.crossplane.io -n default
 kubectl get realm.realm.keycloak.crossplane.io,user.user.keycloak.crossplane.io,client.openidclient.keycloak.crossplane.io
 kubectl get pods -n default
+kubectl top nodes
+kubectl top pods -A
 ```
+
+The umbrella chart installs metrics-server with the Kind-specific
+`--kubelet-insecure-tls` option, enabling the Kubernetes Metrics API used
+by `kubectl top`.
 
 ### Single external URL
 

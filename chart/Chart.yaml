@@ -14,6 +14,12 @@ dependencies:
     version: 2.4.2
     repository: https://charts.crossplane.io/stable
     condition: crossplane.enabled
+  # Metrics API used by `kubectl top`; Kind kubelets use certificates that
+  # metrics-server cannot validate by default.
+  - name: metrics-server
+    version: 3.12.2
+    repository: https://kubernetes-sigs.github.io/metrics-server/
+    condition: metrics-server.enabled
   # CloudNativePG operator (official chart), used for Keycloak's Postgres.
   - name: cloudnative-pg
     version: 0.29.1

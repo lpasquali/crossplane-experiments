@@ -60,11 +60,12 @@ echo "==> Packaging the self-authored WordPress chart..."
 # add` no-ops (with a warning) if the name+URL already match.
 echo "==> Ensuring Helm dependency repos are registered..."
 helm repo add crossplane-stable https://charts.crossplane.io/stable >/dev/null
+helm repo add metrics-server https://kubernetes-sigs.github.io/metrics-server/ >/dev/null
 helm repo add cnpg https://cloudnative-pg.github.io/charts >/dev/null
 helm repo add cloudnative-pg https://cloudnative-pg.github.io/charts >/dev/null
 helm repo add hashicorp https://helm.releases.hashicorp.com >/dev/null
 helm repo add external-secrets https://charts.external-secrets.io >/dev/null
-helm repo update crossplane-stable cnpg cloudnative-pg hashicorp external-secrets >/dev/null
+helm repo update crossplane-stable metrics-server cnpg cloudnative-pg hashicorp external-secrets >/dev/null
 
 echo "==> Refreshing umbrella chart's Helm dependencies..."
 helm dependency build chart/

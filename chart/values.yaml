@@ -20,6 +20,11 @@ crossplane:
       cpu: 20m
       memory: 64Mi
 
+metrics-server:
+  enabled: true
+  args:
+    - --kubelet-insecure-tls
+
 cloudnative-pg:
   enabled: true
   # Operator defaults to no resource requests/limits; without a cap, its
