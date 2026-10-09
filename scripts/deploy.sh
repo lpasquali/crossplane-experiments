@@ -76,7 +76,7 @@ helm upgrade --install "${RELEASE_NAME}" chart/ \
   --timeout 10m ${HELM_ARGS[@]+"${HELM_ARGS[@]}"}
 
 echo "==> Running Helm end-to-end test for '${RELEASE_NAME}'..."
-helm test "${RELEASE_NAME}" --namespace "${NAMESPACE}" --logs --timeout 5m
+helm test "${RELEASE_NAME}" --namespace "${NAMESPACE}" --logs --timeout 31m
 
 cat <<'EOF'
 

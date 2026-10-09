@@ -46,7 +46,7 @@ metadata:
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 spec:
   backoffLimit: 0
-  activeDeadlineSeconds: 300
+  activeDeadlineSeconds: 1800
   template:
     spec:
       serviceAccountName: post-install-smoketest

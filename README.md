@@ -282,7 +282,10 @@ flowchart TB
   `helm test` command (non-zero exit) if either check doesn't pass. The
   deployment script runs this test after installing or upgrading; when
   using Helm directly, run
-  `helm test crossplane-experiments -n crossplane-system --logs --timeout 5m`.
+  `helm test crossplane-experiments -n crossplane-system --logs --timeout 31m`.
+  The test Job has a 30-minute deadline to accommodate first-install image
+  pulls and reconciliation; Helm waits one minute longer to report the
+  Job's result rather than timing out while it is still running.
   A successful install alone confirms resource creation, while a
   successful test confirms the end-to-end behavior. It also self-heals the one known
   `provider-helm` flakiness this demo hits on slower machines: a
